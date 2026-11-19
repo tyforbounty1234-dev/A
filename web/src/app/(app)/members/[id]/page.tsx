@@ -1,7 +1,9 @@
 'use client';
 import { useParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { ButtonLink, Card, Loading, Notice, SectionLabel, Stat, cx } from '@/components/ui';
+import { ButtonLink, Card, LocalOnlyNotice, Loading, Notice, SectionLabel, Stat, cx } from '@/components/ui';
+import { useMe } from '@/lib/me';
+import { IS_LOCAL } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth';
 import {
   SOCIAL_ERROR_MESSAGES,
@@ -15,7 +17,41 @@ import {
   type ShopItem,
 } from '@/lib/social';
 
-export default function MemberPage() {
+export default function Page() {
+  return IS_LOCAL ? <LocalProfile /> : <MemberPage />;
+}
+
+function LocalProfile() {
+  const { member } = useMe();
+  const [owned, setOwned] = useState<ShopItem[]>([]);
+  useEffect(() => {
+    fetchShop().then(async (shop) => {
+      const mine = await fetchOwned('local', shop);
+      setOwned(shop.filter((i) => mine.has(i.id) && i.price > 0));
+    });
+  }, [member]);
+  if (!member) return <Loading />;
+  return (
+    <>
+      <Card className="items-center text-center">
+        <span className="text-6xl">{member.avatar}</span>
+        <h1 className="text-2xl font-bold">{member.displayName}</h1>
+        {member.bio && <p className="text-muted">{member.bio}</p>}
+        <div className="flex w-full gap-3 pt-2">
+          <Stat value={`★ ${member.lpEarned}`} label="獲得LP" tone="gold" />
+          <Stat value={member.masteredCount} label="定着した単語" tone="ok" />
+        </div>
+      </Card>
+      <Card>
+        <SectionLabel>コレクション</SectionLabel>
+        {owned.length === 0 ? <p className="text-sm text-muted">まだショップのエモートを持っていません。</p> : <div className="flex flex-wrap gap-2 text-3xl">{owned.map((i) => <span key={i.id} title={i.name}>{i.emoji}</span>)}</div>}
+      </Card>
+      <LocalOnlyNotice feature="エモートを送る" />
+    </>
+  );
+}
+
+function MemberPage() {
   const { id } = useParams<{ id: string }>();
   const { userId } = useAuth();
   const [member, setMember] = useState<Member | null | undefined>(undefined);

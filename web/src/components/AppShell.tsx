@@ -5,6 +5,7 @@ import { useEffect, type ReactNode } from 'react';
 import { useAuth } from '@/lib/auth';
 import { useLearning } from '@/lib/learning';
 import { useMe } from '@/lib/me';
+import { IS_LOCAL } from '@/lib/supabase';
 import { Icon } from './icons';
 import { Loading, cx } from './ui';
 
@@ -43,8 +44,8 @@ export function AppShell({ children }: { children: ReactNode }) {
             LexiCore
           </Link>
           <div className="flex items-center gap-1">
-            {snap.sync === 'offline' && <span className="mr-1 text-xs text-warn">オフライン</span>}
-            {snap.pendingCount > 0 && snap.sync !== 'offline' && <span className="mr-1 text-xs text-muted">同期中…</span>}
+            {!IS_LOCAL && snap.sync === 'offline' && <span className="mr-1 text-xs text-warn">オフライン</span>}
+            {!IS_LOCAL && snap.pendingCount > 0 && snap.sync !== 'offline' && <span className="mr-1 text-xs text-muted">同期中…</span>}
             <Link
               href="/shop"
               className="tabular flex items-center gap-1 rounded-full bg-warn-soft px-3 py-1 text-sm font-bold text-gold"
@@ -52,6 +53,11 @@ export function AppShell({ children }: { children: ReactNode }) {
             >
               ★ {member?.lpBalance ?? '–'} LP
             </Link>
+            {IS_LOCAL ? (
+              <span className="rounded-full bg-surface-alt px-2.5 py-1 text-xs font-semibold text-muted" title="このブラウザだけに保存しています">
+                ローカル
+              </span>
+            ) : (
             <Link href="/notifications" className="relative rounded-full p-2 text-ink hover:bg-surface-alt" aria-label={`通知${unread ? `（未読${unread}件）` : ''}`}>
               <Icon name="bell" />
               {unread > 0 && (
@@ -60,6 +66,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 </span>
               )}
             </Link>
+            )}
           </div>
         </div>
       </header>

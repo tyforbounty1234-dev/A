@@ -20,6 +20,17 @@ The community version of LexiCore is a **Next.js web app** for a small, invite-o
 
 LP, purchases, reactions and notifications are written only by database functions. Clients cannot change them directly (RLS and column grants; see `supabase/migrations/20261122000000_social.sql`).
 
+### Local mode (no server)
+
+If `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` are not set, the web app runs in **local mode**. No sign-up is needed, and nothing leaves the browser.
+
+- **Works:** learning, spaced repetition, the word list, analytics, and the offline mistake analysis.
+- **Works for one person:** LP (1 per newly mastered word) and the emote shop.
+- **Needs the server:** the leaderboard, reactions, notifications, invites and AI answers. Those pages explain this.
+- Data is stored in that browser only (`localStorage`). It is not synced and is lost if the site data is cleared.
+
+You can deploy to Vercel without any Supabase settings and share the URL. Everyone then studies on their own, and you can add Supabase later.
+
 ### Deploy (Supabase + Vercel, free tiers)
 
 1. **Supabase:** create a project. Apply the schema with `supabase link --project-ref <ref>`, `supabase db push` and `supabase db seed`, or run every file in `supabase/migrations/` and then `supabase/seed.sql` in the SQL editor.

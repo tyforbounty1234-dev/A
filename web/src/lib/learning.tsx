@@ -7,7 +7,7 @@ import { LearningStore, type LearningSnapshot } from '@/lexicore/services/Learni
 import { useStudySessionCore } from '@/lexicore/state/studySessionCore';
 import { useAuth } from './auth';
 import { BrowserStorage } from './browserStorage';
-import { getSupabase } from './supabase';
+import { IS_LOCAL, getSupabase } from './supabase';
 
 const StoreContext = createContext<LearningStore | null>(null);
 
@@ -26,7 +26,7 @@ export function LearningProvider({ children }: { children: ReactNode }) {
     () =>
       new LearningStore({
         storage: new BrowserStorage(),
-        api: new SupabaseApi(getSupabase()),
+        api: IS_LOCAL ? null : new SupabaseApi(getSupabase()),
         bundledWords: bundledWords as Word[],
         newId,
       }),

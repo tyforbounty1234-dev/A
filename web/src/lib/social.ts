@@ -3,7 +3,8 @@
  * invite codes. Every write goes through a database function that checks the
  * rules (LP balance, ownership, rate limits); see supabase/migrations/*_social.sql.
  */
-import { getSupabase } from './supabase';
+import { LOCAL_SHOP, localSocial } from './localSocial';
+import { IS_LOCAL, getSupabase } from './supabase';
 
 export interface Member {
   id: string;
@@ -115,7 +116,29 @@ export async function fetchMembers(): Promise<Member[]> {
   return (data as MemberRow[]).map(toMember);
 }
 
+export function localMember(): Member {
+  const s = localSocial.get();
+  return {
+    id: 'local',
+    displayName: s.displayName,
+    avatar: s.avatar,
+    bio: s.bio,
+    lpBalance: localSocial.balance(s),
+    lpEarned: s.awarded.length,
+    masteredCount: s.awarded.length,
+    createdAt: new Date(0).toISOString(),
+  };
+}
+
 export async function updateMyProfile(id: string, patch: { displayName?: string; avatar?: string; bio?: string }): Promise<Member> {
+  if (IS_LOCAL) {
+    localSocial.updateProfile({
+      ...(patch.displayName !== undefined && { displayName: patch.displayName.trim() }),
+      ...(patch.avatar !== undefined && { avatar: patch.avatar }),
+      ...(patch.bio !== undefined && { bio: patch.bio.trim() }),
+    });
+    return localMember();
+  }
   const row: Record<string, string> = {};
   if (patch.displayName !== undefined) row.display_name = patch.displayName.trim();
   if (patch.avatar !== undefined) row.avatar = patch.avatar;
@@ -139,6 +162,7 @@ export async function fetchLeaderboard(period: 'all' | 'week'): Promise<Leaderbo
 }
 
 export async function fetchShop(): Promise<ShopItem[]> {
+  if (IS_LOCAL) return LOCAL_SHOP;
   const { data, error } = await getSupabase().from('shop_items').select('id, name, emoji, price').eq('active', true).order('sort');
   if (error) throw toSocialError(error);
   return data as ShopItem[];
@@ -146,6 +170,7 @@ export async function fetchShop(): Promise<ShopItem[]> {
 
 /** Item ids the member owns (free items are owned by everyone). */
 export async function fetchOwned(memberId: string, shop: ShopItem[]): Promise<Set<string>> {
+  if (IS_LOCAL) return new Set(shop.filter((i) => localSocial.owns(i.id)).map((i) => i.id));
   const { data, error } = await getSupabase().from('inventory').select('item_id').eq('user_id', memberId);
   if (error) throw toSocialError(error);
   return new Set([...shop.filter((i) => i.price === 0).map((i) => i.id), ...(data as { item_id: string }[]).map((r) => r.item_id)]);
@@ -153,6 +178,11 @@ export async function fetchOwned(memberId: string, shop: ShopItem[]): Promise<Se
 
 /** Returns the new LP balance. */
 export async function purchase(itemId: string): Promise<number> {
+  if (IS_LOCAL) {
+    const r = localSocial.purchase(itemId);
+    if (r !== 'ok') throw new SocialError(r, r);
+    return localSocial.balance();
+  }
   const { data, error } = await getSupabase().rpc('purchase_item', { p_item: itemId });
   if (error) throw toSocialError(error);
   return data as number;

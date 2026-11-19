@@ -17,6 +17,7 @@ import {
   type Member,
 } from '@/lib/social';
 import { DEFAULT_PROFILE } from '@/lexicore/domain/types';
+import { IS_LOCAL } from '@/lib/supabase';
 
 const AVATARS = ['🙂', '😎', '🤓', '🦊', '🐻', '🐼', '🐱', '🐶', '🐧', '🦉', '🐢', '🌸', '🍀', '⚡', '🔥', '🌙', '🚀', '🎧', '📚', '✏️'];
 
@@ -35,16 +36,32 @@ export default function Me() {
           学習分析
         </Link>
       </div>
-      <InviteCard />
+      {IS_LOCAL ? (
+        <Card>
+          <SectionLabel>友だちを招待</SectionLabel>
+          <p className="text-sm text-muted">いまはローカルモードです。サーバー（Supabase）を設定すると、招待リンクとQRコードで友だちを招待できます。</p>
+        </Card>
+      ) : (
+        <InviteCard />
+      )}
       <StudySettings />
       <SyncCard />
-      <Card>
-        <SectionLabel>アカウント</SectionLabel>
-        <p className="text-sm text-muted">{email}</p>
-        <Button variant="danger" onClick={() => void signOut()}>
-          ログアウト
-        </Button>
-      </Card>
+      {IS_LOCAL ? (
+        <Card>
+          <SectionLabel>データ</SectionLabel>
+          <p className="text-sm text-muted">
+            ローカルモードでは、学習の記録・LP・エモートはこのブラウザだけに保存されます。ほかの端末とは同期されず、ブラウザのサイトデータを消すと消えます。
+          </p>
+        </Card>
+      ) : (
+        <Card>
+          <SectionLabel>アカウント</SectionLabel>
+          <p className="text-sm text-muted">{email}</p>
+          <Button variant="danger" onClick={() => void signOut()}>
+            ログアウト
+          </Button>
+        </Card>
+      )}
     </>
   );
 }

@@ -1,8 +1,10 @@
 'use client';
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useAuth } from './auth';
 import { useLearning } from './learning';
-import { countUnread, fetchMember, type Member } from './social';
+import { localSocial } from './localSocial';
+import { countUnread, fetchMember, localMember, type Member } from './social';
+import { IS_LOCAL } from './supabase';
 
 interface MeState {
   member: Member | null;
@@ -16,6 +18,30 @@ const POLL_MS = 60_000;
 
 /** The signed-in member's public profile (LP etc.) and unread notification count. */
 export function MeProvider({ children }: { children: ReactNode }) {
+  return IS_LOCAL ? <LocalMeProvider>{children}</LocalMeProvider> : <CloudMeProvider>{children}</CloudMeProvider>;
+}
+
+/** Local mode: the player's profile and LP live in this browser; LP is awarded here on first mastery. */
+function LocalMeProvider({ children }: { children: ReactNode }) {
+  const snap = useLearning();
+  const version = useSyncExternalStore(localSocial.subscribe, () => localSocial.get(), () => null);
+  const [member, setMemberState] = useState<Member | null>(null);
+
+  useEffect(() => {
+    if (version) setMemberState(localMember());
+  }, [version]);
+
+  useEffect(() => {
+    if (!snap.ready) return;
+    const mastered = [...snap.progress.values()].filter((p) => p.status === 'mastered').map((p) => p.wordId);
+    localSocial.awardMastered(mastered);
+  }, [snap.ready, snap.progress]);
+
+  const refresh = useCallback(async () => setMemberState(localMember()), []);
+  return <Ctx.Provider value={{ member, unread: 0, refresh, setMember: setMemberState }}>{children}</Ctx.Provider>;
+}
+
+function CloudMeProvider({ children }: { children: ReactNode }) {
   const { userId } = useAuth();
   const snap = useLearning();
   const [member, setMember] = useState<Member | null>(null);

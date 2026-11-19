@@ -11,6 +11,7 @@ import { weakWords } from '@/lexicore/domain/analytics';
 import type { Word } from '@/lexicore/domain/types';
 import { compareCandidates } from '@/lexicore/ui/tutor/compareCandidates';
 import { useLearning } from '@/lib/learning';
+import { IS_LOCAL } from '@/lib/supabase';
 import { TUTOR_ERROR_MESSAGES, useTutorRequest, type TutorState } from '@/lib/tutor';
 
 type WordAction = Exclude<TutorKind, 'mistakes'>;
@@ -124,6 +125,11 @@ function Tutor() {
   return (
     <>
       <PageTitle>AI講師</PageTitle>
+      {IS_LOCAL && (
+        <Notice tone="accent">
+          ローカルモードでは、AIの回答は使えません（サーバーにAIの設定が必要です）。間違いの分析と、辞書での似た語の比較は使えます。
+        </Notice>
+      )}
       <Card>
         <SectionLabel>間違いの分析</SectionLabel>
         {analysis.reviewsAnalyzed === 0 ? (
@@ -173,9 +179,11 @@ function Tutor() {
             {analysis.recommendations.map((r, i) => (
               <RecommendationRow key={i} rec={r} onClick={() => onRecommendation(r)} />
             ))}
-            <Button variant="secondary" onClick={() => ask({ kind: 'mistakes' }, 'mistakes')}>
-              AIに学習アドバイスをもらう
-            </Button>
+            {!IS_LOCAL && (
+              <Button variant="secondary" onClick={() => ask({ kind: 'mistakes' }, 'mistakes')}>
+                AIに学習アドバイスをもらう
+              </Button>
+            )}
           </div>
         )}
       </Card>
@@ -203,7 +211,7 @@ function Tutor() {
             <WordDetails word={selected} compact />
             <div className="flex flex-wrap gap-2">
               {ACTIONS.map((a) => (
-                <Chip key={a.kind} active={action === a.kind} onClick={() => chooseAction(a.kind)}>
+                <Chip key={a.kind} active={action === a.kind} disabled={IS_LOCAL && a.kind !== 'compare'} onClick={() => chooseAction(a.kind)}>
                   {a.label}
                 </Chip>
               ))}
@@ -223,10 +231,14 @@ function Tutor() {
                     </Chip>
                   ))}
                 </div>
-                <Button disabled={compareWith.length === 0} onClick={() => ask({ kind: 'compare', wordId: selected.id, others: compareWith }, 'word')}>
-                  AIに使い分けを聞く
-                </Button>
-                {tutor.state.status === 'error' && tutor.state.request.kind === 'compare' && <DictionaryCompare target={selected} others={compareWith} words={snap.words} />}
+                {!IS_LOCAL && (
+                  <Button disabled={compareWith.length === 0} onClick={() => ask({ kind: 'compare', wordId: selected.id, others: compareWith }, 'word')}>
+                    AIに使い分けを聞く
+                  </Button>
+                )}
+                {(IS_LOCAL || (tutor.state.status === 'error' && tutor.state.request.kind === 'compare')) && (
+                  <DictionaryCompare target={selected} others={compareWith} words={snap.words} />
+                )}
               </div>
             )}
             {action === 'context' && (

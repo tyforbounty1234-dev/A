@@ -1,7 +1,8 @@
 'use client';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import { Card, Loading, Notice, PageTitle, cx } from '@/components/ui';
+import { Card, LocalOnlyNotice, Loading, Notice, PageTitle, cx } from '@/components/ui';
+import { IS_LOCAL } from '@/lib/supabase';
 import { formatWhen } from '@/lib/format';
 import { useMe } from '@/lib/me';
 import { SOCIAL_ERROR_MESSAGES, SocialError, fetchNotifications, markAllRead, type AppNotification } from '@/lib/social';
@@ -20,7 +21,18 @@ function describe(n: AppNotification): { icon: string; text: string; href?: stri
   }
 }
 
-export default function Notifications() {
+export default function Page() {
+  return IS_LOCAL ? (
+    <>
+      <PageTitle>通知</PageTitle>
+      <LocalOnlyNotice feature="通知" />
+    </>
+  ) : (
+    <Notifications />
+  );
+}
+
+function Notifications() {
   const { refresh } = useMe();
   const [items, setItems] = useState<AppNotification[] | null>(null);
   const [error, setError] = useState<string | null>(null);

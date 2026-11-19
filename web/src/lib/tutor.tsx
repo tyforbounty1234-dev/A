@@ -6,7 +6,7 @@ import { TutorService } from '@/lexicore/services/TutorService';
 import { useAuth } from './auth';
 import { BrowserStorage } from './browserStorage';
 import { useLearningStore } from './learning';
-import { getSupabase } from './supabase';
+import { IS_LOCAL, getSupabase } from './supabase';
 
 const Ctx = createContext<TutorService | null>(null);
 
@@ -15,7 +15,7 @@ export function TutorProvider({ children }: { children: ReactNode }) {
   const [service] = useState(
     () =>
       new TutorService({
-        api: new SupabaseTutorApi(getSupabase()),
+        api: IS_LOCAL ? null : new SupabaseTutorApi(getSupabase()),
         storage: new BrowserStorage(),
         // Upload pending answers first so the tutor sees the latest mistakes.
         beforeRequest: () => store.flush(),

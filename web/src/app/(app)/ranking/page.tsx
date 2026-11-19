@@ -1,13 +1,35 @@
 'use client';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import { Card, Chip, Loading, Notice, PageTitle, cx } from '@/components/ui';
+import { Card, Chip, LocalOnlyNotice, Loading, Notice, PageTitle, cx } from '@/components/ui';
+import { useMe } from '@/lib/me';
+import { IS_LOCAL } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth';
 import { SOCIAL_ERROR_MESSAGES, SocialError, fetchLeaderboard, type LeaderboardRow } from '@/lib/social';
 
 const MEDALS = ['🥇', '🥈', '🥉'];
 
-export default function Ranking() {
+export default function Page() {
+  return IS_LOCAL ? <LocalRanking /> : <Ranking />;
+}
+
+function LocalRanking() {
+  const { member } = useMe();
+  return (
+    <>
+      <PageTitle>ランキング</PageTitle>
+      <Card className="items-center text-center">
+        <span className="text-5xl">{member?.avatar}</span>
+        <p className="text-lg font-bold">{member?.displayName}</p>
+        <p className="tabular text-3xl font-bold text-gold">★ {member?.lpEarned ?? 0} LP</p>
+        <p className="text-sm text-muted">定着した単語 {member?.masteredCount ?? 0} 語</p>
+      </Card>
+      <LocalOnlyNotice feature="ランキング" />
+    </>
+  );
+}
+
+function Ranking() {
   const { userId } = useAuth();
   const [period, setPeriod] = useState<'all' | 'week'>('all');
   const [rows, setRows] = useState<LeaderboardRow[] | null>(null);

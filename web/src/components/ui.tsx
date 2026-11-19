@@ -137,3 +137,14 @@ export function Chip({ active, disabled, onClick, children }: { active?: boolean
     </button>
   );
 }
+
+export function LocalOnlyNotice({ feature }: { feature: string }) {
+  return (
+    <Card>
+      <p className="font-semibold">{feature}は、友だちと使う機能です</p>
+      <p className="text-sm text-muted">
+        いまは「ローカルモード」（このブラウザだけで使うモード）です。管理者がサーバー（Supabase）を設定すると、招待した友だちとランキングやエモートを使えるようになります。学習の記録はこのブラウザに保存されています。
+      </p>
+    </Card>
+  );
+}

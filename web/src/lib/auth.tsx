@@ -1,7 +1,10 @@
 'use client';
 import type { Session } from '@supabase/supabase-js';
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { getSupabase, isSupabaseConfigured } from './supabase';
+import { IS_LOCAL, getSupabase, isSupabaseConfigured } from './supabase';
+
+/** User id used for everything stored in local mode. */
+export const LOCAL_USER_ID = 'local';
 
 export interface AuthState {
   loading: boolean;
@@ -50,7 +53,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const value = useMemo<AuthState>(
     () => ({
       loading,
-      userId: session?.user.id ?? null,
+      userId: IS_LOCAL ? LOCAL_USER_ID : (session?.user.id ?? null),
       email: session?.user.email ?? null,
       async signIn(email, password) {
         const { error } = await getSupabase().auth.signInWithPassword({ email: email.trim(), password });

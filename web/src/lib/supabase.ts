@@ -9,6 +9,12 @@ const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
 export const isSupabaseConfigured = Boolean(url && anonKey);
+/**
+ * Local mode: no server configured. Learning works fully in this browser;
+ * features that need other people (ranking, reactions, invites) and the AI
+ * answers are unavailable.
+ */
+export const IS_LOCAL = !isSupabaseConfigured;
 
 let client: SupabaseClient | null = null;
 
