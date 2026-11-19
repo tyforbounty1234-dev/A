@@ -17,6 +17,7 @@ import {
   type Member,
 } from '@/lib/social';
 import { DEFAULT_PROFILE } from '@/lexicore/domain/types';
+import { LEVEL_LABELS } from '@/lib/levels';
 import { IS_LOCAL } from '@/lib/supabase';
 
 const AVATARS = ['🙂', '😎', '🤓', '🦊', '🐻', '🐼', '🐱', '🐶', '🐧', '🦉', '🐢', '🌸', '🍀', '⚡', '🔥', '🌙', '🚀', '🎧', '📚', '✏️'];
@@ -261,13 +262,13 @@ function StudySettings() {
       <Field label={`1日の復習の上限: ${reviewLimit} 語`}>
         <input type="range" min={10} max={500} step={10} value={reviewLimit} onChange={(e) => setReviewLimit(Number(e.target.value))} className="accent-[var(--accent)]" />
       </Field>
-      <Field label="英語のレベル（AI講師の例文の難しさ）">
+      <Field label="英語のレベル" hint="新しく学ぶ単語は、このレベルの単語から順に出ます（AI講師の例文の難しさにも使います）。">
         <select className={inputClass} value={level} onChange={(e) => setLevel(Number(e.target.value))}>
-          <option value={1}>1: 基礎（英検準2級くらい）</option>
-          <option value={2}>2: 標準（共通テストくらい）</option>
-          <option value={3}>3: 入試標準</option>
-          <option value={4}>4: 京大・東大レベル</option>
-          <option value={5}>5: 上級（大学以上）</option>
+          {Object.entries(LEVEL_LABELS).map(([v, label]) => (
+            <option key={v} value={v}>
+              Lv.{v}: {label}
+            </option>
+          ))}
         </select>
       </Field>
       <Button variant="secondary" onClick={save}>

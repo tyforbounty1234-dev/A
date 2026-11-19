@@ -5,6 +5,7 @@ import { Chip, Loading, PageTitle, Pill, inputClass } from '@/components/ui';
 import { isDifficult } from '@/lexicore/domain/srs/progress';
 import type { LearningStatus, WordProgress } from '@/lexicore/domain/types';
 import { useLearning } from '@/lib/learning';
+import { LEVEL_SHORT } from '@/lib/levels';
 
 type Filter = 'all' | 'unseen' | 'learning' | 'mastered' | 'difficult';
 const FILTERS: { key: Filter; label: string }[] = [
@@ -29,13 +30,15 @@ export default function Words() {
   const snap = useLearning();
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
+  const [level, setLevel] = useState<number | null>(null);
   const items = useMemo(() => {
     const q = query.trim().toLowerCase();
     return [...snap.words]
       .sort((a, b) => a.word.localeCompare(b.word))
       .filter((w) => matches(snap.progress.get(w.id), filter))
+      .filter((w) => level === null || w.difficulty === level)
       .filter((w) => !q || w.word.includes(q) || w.senses.some((s) => s.ja.includes(q)) || w.synonyms.some((s) => s.includes(q)));
-  }, [snap.words, snap.progress, query, filter]);
+  }, [snap.words, snap.progress, query, filter, level]);
   if (!snap.ready) return <Loading />;
 
   return (
@@ -49,6 +52,16 @@ export default function Words() {
           </Chip>
         ))}
       </div>
+      <div className="flex flex-wrap gap-2" aria-label="難易度">
+        <Chip active={level === null} onClick={() => setLevel(null)}>
+          全レベル
+        </Chip>
+        {[1, 2, 3, 4, 5].map((l) => (
+          <Chip key={l} active={level === l} onClick={() => setLevel(level === l ? null : l)}>
+            Lv.{l} {LEVEL_SHORT[l]}
+          </Chip>
+        ))}
+      </div>
       <ul className="divide-y divide-line rounded-2xl border border-line bg-surface">
         {items.length === 0 && <li className="p-4 text-muted">該当する単語はありません。</li>}
         {items.map((w) => {
@@ -59,7 +72,9 @@ export default function Words() {
             <li key={w.id}>
               <Link href={`/words/${w.id}`} className="flex items-center gap-3 px-4 py-3 hover:bg-surface-alt">
                 <div className="min-w-0 flex-1">
-                  <p className="font-bold">{w.word}</p>
+                  <p className="font-bold">
+                    {w.word} <span className="text-xs font-normal text-muted">Lv.{w.difficulty}</span>
+                  </p>
                   <p className="truncate text-sm text-muted">
                     {w.partOfSpeech} {w.senses[0]?.ja}
                   </p>

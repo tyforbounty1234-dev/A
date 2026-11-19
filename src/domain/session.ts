@@ -34,7 +34,8 @@ export interface SessionPlan {
 export interface PlanContext {
   words: readonly Word[];
   progressByWord: ReadonlyMap<string, WordProgress>;
-  profile: Pick<UserProfile, 'dailyNewWords' | 'dailyReviewLimit'>;
+  /** proficiencyLevel (1–5) picks which difficulty new words come from first. */
+  profile: Pick<UserProfile, 'dailyNewWords' | 'dailyReviewLimit'> & Partial<Pick<UserProfile, 'proficiencyLevel'>>;
   now: Date;
   competencies?: readonly Competency[];
 }
@@ -111,7 +112,7 @@ export function planWeakSession(ctx: PlanContext & { thresholds?: Thresholds }, 
 }
 
 export function planLearnSession(ctx: PlanContext, count = remainingNewWordsToday(ctx)): SessionPlan {
-  const fresh = unseenWords(ctx.words, ctx.progressByWord).slice(0, Math.max(0, count));
+  const fresh = unseenWords(ctx.words, ctx.progressByWord, ctx.profile.proficiencyLevel).slice(0, Math.max(0, count));
   const seed = ctx.now.toISOString();
   const shuffled = (round: string) =>
     fresh

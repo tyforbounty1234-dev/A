@@ -1,4 +1,5 @@
 import type { Word } from '@/lexicore/domain/types';
+import { LEVEL_SHORT } from '@/lib/levels';
 
 /** Dictionary entry. Empty fields are omitted. */
 export function WordDetails({ word, compact = false }: { word: Word; compact?: boolean }) {
@@ -9,6 +10,9 @@ export function WordDetails({ word, compact = false }: { word: Word; compact?: b
         <span className="text-sm text-muted">
           {word.partOfSpeech}
           {word.ipa ? `  /${word.ipa}/` : ''}
+        </span>
+        <span className="rounded-full bg-surface-alt px-2 py-0.5 text-xs font-semibold text-muted">
+          Lv.{word.difficulty} {LEVEL_SHORT[word.difficulty] ?? ''}
         </span>
       </div>
       {word.senses.map((s, i) => (

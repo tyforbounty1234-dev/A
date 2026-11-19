@@ -43,13 +43,20 @@ export function countDue(progress: Iterable<WordProgress>, now: Date): number {
 }
 
 /** Words never studied, in curriculum order. */
-export function unseenWords(words: readonly Word[], progressByWord: ReadonlyMap<string, WordProgress>): Word[] {
+/**
+ * Words not studied yet, in the order they should be introduced. With a
+ * `level` (the learner's proficiency, 1–5), words at that difficulty come
+ * first, then the nearest levels (harder before easier on a tie), each in
+ * curriculum order.
+ */
+export function unseenWords(words: readonly Word[], progressByWord: ReadonlyMap<string, WordProgress>, level?: number): Word[] {
+  const distance = (w: Word) => (level === undefined ? 0 : Math.abs(w.difficulty - level) * 2 + (w.difficulty < level ? 1 : 0));
   return words
     .filter((w) => {
       const p = progressByWord.get(w.id);
       return !p || p.reviewCount === 0;
     })
-    .sort((a, b) => a.rank - b.rank || a.difficulty - b.difficulty || a.word.localeCompare(b.word));
+    .sort((a, b) => distance(a) - distance(b) || a.rank - b.rank || a.difficulty - b.difficulty || a.word.localeCompare(b.word));
 }
 
 /** Count of words whose first review happened on the same local day as `now`. */

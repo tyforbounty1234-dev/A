@@ -21,15 +21,15 @@ insert into auth.users (id, email, raw_user_meta_data) values
   ('11111111-1111-1111-1111-111111111111', 'a@example.com', '{"invite_code":"TESTCODE1","display_name":"Aki"}'),
   ('22222222-2222-2222-2222-222222222222', 'b@example.com', '{"invite_code":"testcode1","display_name":"Ben"}');
 select pg_temp.check((select count(*) from public.profiles) = 2, 'profiles created by auth trigger');
-select pg_temp.check((select count(*) from public.words) = 203, 'seed loaded 203 words');
+select pg_temp.check((select count(*) from public.words) = 703, 'seed loaded 703 words');
 
 -- Seed is idempotent.
 \i supabase/seed.sql
-select pg_temp.check((select count(*) from public.words) = 203, 'seed re-run does not duplicate words');
+select pg_temp.check((select count(*) from public.words) = 703, 'seed re-run does not duplicate words');
 
 -- ---------------------------------------------------------------- user A
 select pg_temp.as_user('11111111-1111-1111-1111-111111111111');
-select pg_temp.check((select count(*) from public.words) = 203, 'authenticated user can read words');
+select pg_temp.check((select count(*) from public.words) = 703, 'authenticated user can read words');
 select pg_temp.check((select count(*) from public.profiles) = 1, 'user sees only own profile');
 
 insert into public.study_sessions (id, mode, started_at, planned_reviews)
@@ -175,7 +175,7 @@ select pg_temp.check(true, 'anonymous clients cannot read data or submit reviews
 -- Deleting an auth user removes their learning data (account deletion).
 delete from auth.users where id = '11111111-1111-1111-1111-111111111111';
 select pg_temp.check((select count(*) from public.reviews) = 0, 'account deletion cascades to history');
-select pg_temp.check((select count(*) from public.words) = 203, 'account deletion keeps shared words');
+select pg_temp.check((select count(*) from public.words) = 703, 'account deletion keeps shared words');
 
 -- ---------------------------------------------------------------- Phase 2
 select pg_temp.as_user('22222222-2222-2222-2222-222222222222');

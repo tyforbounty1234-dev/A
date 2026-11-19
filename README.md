@@ -65,7 +65,7 @@ npx expo start          # press i / a for a simulator, or scan the QR code with 
 
 Without Supabase settings the app runs in **local mode**:
 
-- It uses the bundled 203-word vocabulary.
+- It uses the bundled 703-word vocabulary.
 - All learning data stays on the device.
 - No sign-in is needed.
 
@@ -297,11 +297,22 @@ Reliability rules:
 
 ### Vocabulary data
 
-`data/vocabulary.source.json` holds 203 words. Each has an English definition, a Japanese meaning, synonyms and a synonym group; the group keeps near-synonyms from appearing together as answer choices.
+`data/vocabulary.source.json` holds 703 words in five difficulty levels. Each has an English definition, a Japanese meaning, synonyms and a synonym group; the group keeps near-synonyms from appearing together as answer choices.
+
+| Level | Words | Roughly |
+|---|---|---|
+| 1 基礎 | 100 | Eiken Pre-2 |
+| 2 標準 | 100 | Common Test |
+| 3 入試 | 100 | standard university entrance exams |
+| 4 難関 | 303 | Kyoto University / University of Tokyo |
+| 5 上級 | 100 | university level, Eiken Grade 1 and above |
+
+- New words come from the learner's level first (the "英語のレベル" setting), then the nearest level, harder before easier.
+- The word list can be filtered by level.
+- Words that share a Japanese gloss, or list each other as synonyms, are put in the same synonym group, so they are never each other's wrong answer choices. A test checks this for every word.
 
 - The schema already supports IPA, audio, examples, antonyms, collocations, derivatives, etymology and exam tags.
 - The current data does not fill those fields yet. The UI hides empty fields.
-- All words currently have difficulty 4.
 - The definitions were written for this project and should be reviewed against a dictionary before production use.
 
 To change the vocabulary, edit the source file and run `npm run vocab:build`.
