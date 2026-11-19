@@ -216,3 +216,75 @@ select public.submit_review(
 select pg_temp.check((select prev_interval is null and applied_modifier is null from public.reviews
   where id = 'bbbbbbbb-0000-0000-0000-0000000000c2'), 'reviews without adaptive fields are still accepted');
 reset role;
+
+-- ---------------------------------------------------------------- Phase 3: AI tutor storage
+create or replace function pg_temp.as_service() returns void language plpgsql as $$
+begin
+  perform set_config('request.jwt.claim.sub', '', false);
+  execute 'set role service_role';
+end $$;
+
+insert into auth.users (id, email) values
+  ('33333333-3333-3333-3333-333333333333', 'c@example.com'),
+  ('44444444-4444-4444-4444-444444444444', 'd@example.com');
+select pg_temp.as_service();
+select pg_temp.check(public.reserve_ai_request('33333333-3333-3333-3333-333333333333', 'examples', 2), 'service reserves 1st AI request');
+select pg_temp.check(public.reserve_ai_request('33333333-3333-3333-3333-333333333333', 'examples', 2), 'service reserves 2nd AI request');
+select pg_temp.check(not public.reserve_ai_request('33333333-3333-3333-3333-333333333333', 'examples', 2), 'daily AI limit is enforced');
+select pg_temp.check(public.reserve_ai_request('44444444-4444-4444-4444-444444444444', 'examples', 2), 'AI limit is per user');
+insert into public.ai_generations (user_id, kind, word_id, cache_key, prompt_version, model, request, content) values
+  ('33333333-3333-3333-3333-333333333333', 'examples', '8c57149c-6089-5fe0-8594-3eba84f4092c', repeat('a', 64), 'p3.1', 'm', '{"kind":"examples"}', '{"examples":[]}'),
+  ('44444444-4444-4444-4444-444444444444', 'mistakes', null, repeat('b', 64), 'p3.1', 'm', '{"kind":"mistakes"}', '{"summaryJa":"x"}');
+select pg_temp.check((select count(*) from public.ai_generations) = 2, 'service can store validated AI content');
+reset role;
+
+do $$ begin
+  insert into public.ai_generations (user_id, kind, cache_key, prompt_version, model, request, content)
+  values ('33333333-3333-3333-3333-333333333333', 'joke', repeat('c', 64), 'p', 'm', '{}', '{}');
+  raise exception 'FAILED: unknown AI kind accepted';
+exception when check_violation then null;
+end $$;
+select pg_temp.check(true, 'unknown AI kinds are rejected');
+
+select pg_temp.as_user('33333333-3333-3333-3333-333333333333');
+select pg_temp.check((select count(*) from public.ai_generations) = 1, 'user reads only own AI content');
+do $$ begin
+  insert into public.ai_generations (user_id, kind, cache_key, prompt_version, model, request, content)
+  values ('33333333-3333-3333-3333-333333333333', 'examples', repeat('d', 64), 'p', 'm', '{}', '{"examples":[]}');
+  raise exception 'FAILED: client inserted AI content';
+exception when insufficient_privilege then null;
+end $$;
+select pg_temp.check(true, 'clients cannot write AI content');
+do $$ begin
+  update public.ai_generations set content = '{"hacked":true}';
+  raise exception 'FAILED: client updated AI content';
+exception when insufficient_privilege then null;
+end $$;
+select pg_temp.check(true, 'clients cannot change AI content');
+do $$ begin
+  perform public.reserve_ai_request('33333333-3333-3333-3333-333333333333', 'x', 1000);
+  raise exception 'FAILED: client reserved AI quota';
+exception when insufficient_privilege then null;
+end $$;
+select pg_temp.check(true, 'clients cannot call the quota function');
+do $$ begin
+  perform count(*) from public.ai_requests;
+  raise exception 'FAILED: client read the AI usage log';
+exception when insufficient_privilege then null;
+end $$;
+select pg_temp.check(true, 'clients cannot read the AI usage log');
+reset role;
+
+select pg_temp.as_user(null);
+do $$ begin
+  perform count(*) from public.ai_generations;
+  raise exception 'FAILED: anon read AI content';
+exception when insufficient_privilege then null;
+end $$;
+select pg_temp.check(true, 'anonymous users cannot read AI content');
+reset role;
+
+delete from auth.users where id = '44444444-4444-4444-4444-444444444444';
+select pg_temp.check((select count(*) from public.ai_generations where user_id = '44444444-4444-4444-4444-444444444444') = 0
+  and (select count(*) from public.ai_requests where user_id = '44444444-4444-4444-4444-444444444444') = 0,
+  'deleting a user deletes their AI data');

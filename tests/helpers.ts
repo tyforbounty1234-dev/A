@@ -1,4 +1,5 @@
-import type { Word, WordProgress } from '../src/domain/types';
+import type { QuestionType, ReviewRecord, Word, WordProgress } from '../src/domain/types';
+import { QUESTION_COMPETENCY } from '../src/domain/types';
 import { newProgress } from '../src/domain/srs/progress';
 import wordsJson from '../src/data/words.json';
 
@@ -30,3 +31,26 @@ export function progress(wordId: string, over: Partial<WordProgress> = {}): Word
 export const T0 = new Date('2026-11-19T01:00:00Z'); // 10:00 in Asia/Tokyo
 export const DAY = 24 * 60 * 60 * 1000;
 export const at = (base: Date, ms: number) => new Date(base.getTime() + ms);
+
+let n = 0;
+/** A review record for tests; minutes after T0 defaults to a running counter. */
+export function review(wordId: string, questionType: QuestionType, isCorrect: boolean, userAnswer: string, minutes = n): ReviewRecord {
+  n++;
+  return {
+    id: `r${n}`,
+    userId: 'user-1',
+    wordId,
+    sessionId: null,
+    questionType,
+    competency: QUESTION_COMPETENCY[questionType],
+    userAnswer,
+    isCorrect,
+    responseTimeMs: 3000,
+    quality: isCorrect ? 4 : 1,
+    kind: 'scheduled',
+    reviewedAt: at(T0, minutes * 60_000).toISOString(),
+    prevIntervalDays: 1,
+    appliedModifier: 1,
+  };
+}
+

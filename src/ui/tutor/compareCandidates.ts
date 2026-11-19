@@ -1,0 +1,19 @@
+import type { Word } from '../../domain/types';
+
+/** Words worth comparing with the target: confusions first, then dictionary near-synonyms, then listed synonyms. */
+export function compareCandidates(target: Word, words: readonly Word[], confusions: { wordId: string; confusedWithId: string }[]) {
+  const out: { text: string; label: string; confused: boolean }[] = [];
+  const add = (label: string, confused: boolean) => {
+    const text = label.toLowerCase();
+    if (text !== target.word.toLowerCase() && !out.some((o) => o.text === text)) out.push({ text, label, confused });
+  };
+  const byId = new Map(words.map((w) => [w.id, w]));
+  for (const x of confusions) {
+    const other = x.wordId === target.id ? x.confusedWithId : x.confusedWithId === target.id ? x.wordId : null;
+    const w = other ? byId.get(other) : undefined;
+    if (w) add(w.word, true);
+  }
+  if (target.synonymGroup) for (const w of words) if (w.synonymGroup === target.synonymGroup) add(w.word, false);
+  for (const s of target.synonyms) add(s, false);
+  return out.slice(0, 8);
+}

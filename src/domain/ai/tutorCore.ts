@@ -1,0 +1,205 @@
+/**
+ * Server-side orchestration of one tutor request (runs in the ai-tutor Edge
+ * Function; tested with Jest). All I/O is injected:
+ *
+ *   validate request → load dictionary + learner data (RLS-scoped) → cache →
+ *   quota → build prompt → call model → validate (one corrective retry) →
+ *   save validated content → respond.
+ *
+ * Unvalidated model output is never saved or returned.
+ */
+import type { ReviewRecord, UserProfile, Word, WordProgress } from '../types';
+import {
+  PROMPT_VERSION,
+  TUTOR_ERROR_STATUS,
+  parseTutorRequest,
+  requestKey,
+  type TutorContent,
+  type TutorErrorBody,
+  type TutorErrorCode,
+  type TutorKind,
+  type TutorRequest,
+  type TutorResponse,
+} from './contract';
+import { buildLearnerContext } from './learnerContext';
+import { analyzeMistakes } from './mistakes';
+import { buildPrompt, type BuiltPrompt } from './prompts';
+import { validateTutorOutput, type ValidationContext } from './validate';
+import { usesWord } from './lexical';
+
+export interface StoredGeneration {
+  kind: TutorKind;
+  content: TutorContent;
+  model: string;
+  promptVersion: string;
+  createdAt: string;
+}
+
+export interface TutorRepo {
+  /** Static dictionary. */
+  getWords(): Promise<Word[]>;
+  /** The caller's own data (read with the caller's credentials, so RLS applies). */
+  getProfile(): Promise<Pick<UserProfile, 'proficiencyLevel' | 'learningGoal'> | null>;
+  getProgress(): Promise<WordProgress[]>;
+  getRecentReviews(limit: number): Promise<ReviewRecord[]>;
+  findGeneration(cacheKey: string, notBefore: string): Promise<StoredGeneration | null>;
+  /** Atomically count this request against the daily limit; false when the limit is reached. */
+  reserveRequest(kind: TutorKind, dailyLimit: number): Promise<boolean>;
+  saveGeneration(g: { kind: TutorKind; wordId: string | null; cacheKey: string; request: TutorRequest; content: TutorContent; model: string; promptVersion: string }): Promise<void>;
+}
+
+export interface LlmMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+}
+
+export interface Llm {
+  /** Returns the raw JSON text produced for the schema. Throws LlmError on failure. */
+  complete(req: { messages: LlmMessage[]; schemaName: string; schema: BuiltPrompt['schema'] }): Promise<{ text: string; model: string }>;
+}
+
+export class LlmError extends Error {
+  constructor(
+    message: string,
+    readonly retryable: boolean,
+  ) {
+    super(message);
+    this.name = 'LlmError';
+  }
+}
+
+export interface TutorDeps {
+  repo: TutorRepo;
+  llm: Llm;
+  now: () => Date;
+  /** SHA-256 (or similar) hex digest. */
+  hash: (text: string) => Promise<string>;
+  dailyLimit: number;
+  /** How long a stored generation can be reused. */
+  cacheDays?: number;
+  log?: (event: string, data: Record<string, unknown>) => void;
+}
+
+export interface TutorResult {
+  status: number;
+  body: TutorResponse | TutorErrorBody;
+}
+
+const REVIEW_HISTORY_LIMIT = 500;
+const DEFAULT_CACHE_DAYS = 7;
+
+function fail(code: TutorErrorCode, message: string): TutorResult {
+  return { status: TUTOR_ERROR_STATUS[code], body: { error: { code, message } } };
+}
+
+export async function handleTutorRequest(rawBody: unknown, deps: TutorDeps): Promise<TutorResult> {
+  const parsed = parseTutorRequest(rawBody);
+  if (!parsed.ok) return fail('bad_request', parsed.reason);
+  const request = parsed.request;
+  const force = !!rawBody && typeof rawBody === 'object' && (rawBody as { force?: unknown }).force === true;
+  const log = deps.log ?? (() => {});
+
+  const [words, profile, progress, reviews] = await Promise.all([
+    deps.repo.getWords(),
+    deps.repo.getProfile(),
+    deps.repo.getProgress(),
+    deps.repo.getRecentReviews(REVIEW_HISTORY_LIMIT),
+  ]);
+  const wordsById = new Map(words.map((w) => [w.id, w]));
+  const target = request.kind === 'mistakes' ? null : (wordsById.get(request.wordId) ?? null);
+  if (request.kind !== 'mistakes' && !target) return fail('not_found', 'word not found');
+
+  // Comparison words: dictionary entries, or synonyms the dictionary lists for the target.
+  const others: Word[] = [];
+  const otherNames: string[] = [];
+  if (request.kind === 'compare') {
+    const byText = new Map(words.map((w) => [w.word.toLowerCase(), w]));
+    const listed = new Set(target!.synonyms.map((s) => s.toLowerCase()));
+    for (const name of request.others) {
+      const entry = byText.get(name);
+      if (entry && entry.id !== target!.id) others.push(entry);
+      else if (listed.has(name)) otherNames.push(target!.synonyms.find((s) => s.toLowerCase() === name)!);
+      else return fail('bad_request', `"${name}" is neither a dictionary word nor a listed synonym`);
+    }
+  }
+  if (request.kind === 'context' && !usesWord(request.sentence, target!)) {
+    return fail('bad_request', `the sentence must contain "${target!.word}"`);
+  }
+
+  const analysis = analyzeMistakes(reviews, words);
+  const learner = buildLearnerContext({
+    profile,
+    progress,
+    reviews,
+    words,
+    analysis,
+    targetWordId: request.kind === 'mistakes' ? undefined : request.wordId,
+  });
+  const prompt = buildPrompt({ request, target, others, otherNames, learner, analysis, wordsById });
+
+  // The learner data is part of the key, so a cached answer is reused only while it is still accurate.
+  const cacheKey = await deps.hash(JSON.stringify([PROMPT_VERSION, requestKey(request), prompt.user]));
+  const now = deps.now();
+  if (!force) {
+    const since = new Date(now.getTime() - (deps.cacheDays ?? DEFAULT_CACHE_DAYS) * 86_400_000).toISOString();
+    const hit = await deps.repo.findGeneration(cacheKey, since);
+    if (hit && hit.kind === request.kind) {
+      return {
+        status: 200,
+        body: { kind: hit.kind, content: hit.content, model: hit.model, promptVersion: hit.promptVersion, generatedAt: hit.createdAt, cached: true },
+      };
+    }
+  }
+
+  if (!(await deps.repo.reserveRequest(request.kind, deps.dailyLimit))) {
+    return fail('quota_exceeded', `daily AI limit (${deps.dailyLimit}) reached`);
+  }
+
+  const vctx: ValidationContext = { request, target, others, otherNames, words, analysis };
+  const messages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
+    { role: 'system', content: prompt.system },
+    { role: 'user', content: prompt.user },
+  ];
+
+  let lastErrors: string[] = [];
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    let text: string;
+    let model: string;
+    try {
+      ({ text, model } = await deps.llm.complete({ messages, schemaName: prompt.schemaName, schema: prompt.schema }));
+    } catch (e) {
+      log('llm_error', { kind: request.kind, attempt, message: e instanceof Error ? e.message : String(e) });
+      return fail('ai_unavailable', 'the AI service is unavailable; try again later');
+    }
+    let raw: unknown;
+    try {
+      raw = JSON.parse(text);
+    } catch {
+      raw = undefined;
+    }
+    const result = raw === undefined ? { ok: false as const, errors: ['output is not valid JSON'] } : validateTutorOutput(request.kind, raw, vctx);
+    if (result.ok) {
+      await deps.repo.saveGeneration({
+        kind: request.kind,
+        wordId: target?.id ?? null,
+        cacheKey,
+        request,
+        content: result.content,
+        model,
+        promptVersion: PROMPT_VERSION,
+      });
+      log('generated', { kind: request.kind, attempt, model });
+      return {
+        status: 200,
+        body: { kind: request.kind, content: result.content, model, promptVersion: PROMPT_VERSION, generatedAt: now.toISOString(), cached: false },
+      };
+    }
+    lastErrors = result.errors;
+    log('invalid_output', { kind: request.kind, attempt, errors: result.errors });
+    messages.push(
+      { role: 'assistant', content: text },
+      { role: 'user', content: `Your output failed validation:\n- ${result.errors.join('\n- ')}\nReturn corrected JSON that fixes every problem.` },
+    );
+  }
+  return fail('invalid_output', `the AI answer failed validation (${lastErrors.slice(0, 3).join('; ')})`);
+}

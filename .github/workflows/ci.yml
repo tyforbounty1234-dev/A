@@ -14,9 +14,13 @@ jobs:
       - run: npm ci
       - name: Generated vocabulary is up to date
         run: npm run vocab:check
+      - name: Edge Function shared code is up to date
+        run: npm run shared:check
       - name: Typecheck (strict)
         run: npm run typecheck
       - name: Unit tests
         run: npm test -- --ci
       - name: Database schema and RLS tests
         run: npm run test:db
+      - name: Edge Function (Deno) typecheck and tests
+        run: npm run test:edge

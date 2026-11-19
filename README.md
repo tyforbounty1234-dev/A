@@ -4,7 +4,7 @@ Mobile-first English vocabulary app for Japanese students preparing for highly c
 
 The goal is **long-term retention**, so the core of the app is a reliable spaced-repetition engine. Feature count and study time are secondary.
 
-**Status:** Phase 1 (MVP) and Phase 2 (memory optimization) are implemented. AI features (Phase 3) are not implemented yet; the AI Tutor tab is a placeholder.
+**Status:** Phase 1 (MVP), Phase 2 (memory optimization) and Phase 3 (AI tutor) are implemented. Phase 4 (forgetting-probability prediction) is not started.
 
 ## Quick start
 
@@ -43,17 +43,33 @@ This is the fastest way to try the app.
 
 Only the public anon key goes in the app. Every table is protected by Row Level Security. The `service_role` key and any OpenAI key must never be added to the client.
 
+### Enabling the AI tutor
+
+The AI tutor runs in the `ai-tutor` Supabase Edge Function. The OpenAI key is stored as a server secret.
+
+```bash
+supabase db push                                   # includes the Phase 3 migration
+supabase secrets set OPENAI_API_KEY=sk-...         # required
+supabase secrets set OPENAI_MODEL=gpt-5-mini       # optional (this is the default)
+supabase secrets set AI_DAILY_LIMIT=30             # optional: AI requests per user per 24 h
+supabase functions deploy ai-tutor
+```
+
+Without these steps the app still works. The AI Tutor tab then shows the offline mistake analysis and a dictionary-only comparison, and marks AI as off.
+
 ## Checks
 
 | Command | What it checks |
 |---|---|
 | `npm run typecheck` | TypeScript strict mode, with `noUncheckedIndexedAccess` |
-| `npm test` | 100 Jest tests: domain logic, the offline sync store, and 120-day simulated learners for adaptive scheduling |
-| `npm run test:db` | 33 database checks against a throwaway local PostgreSQL: RLS isolation, idempotency, ordering safety, immutable history, seed idempotency |
+| `npm test` | 146 Jest tests: domain logic, the offline sync store, 120-day simulated learners for adaptive scheduling, and the AI tutor (validation, prompts, server flow, client) |
+| `npm run test:db` | 45 database checks against a throwaway local PostgreSQL: RLS isolation, idempotency, ordering safety, immutable history, seed idempotency, AI content and quota rules |
+| `npm run test:edge` | Deno typecheck and 8 tests of the `ai-tutor` function's HTTP layer and OpenAI client, against a local fake OpenAI server |
 | `npm run vocab:check` | The generated vocabulary files match `data/vocabulary.source.json` |
-| `npm run verify` | vocab check, typecheck and unit tests together |
+| `npm run shared:check` | The Edge Function's copy of the shared code (`supabase/functions/_shared/lexicore`) matches `src/` |
+| `npm run verify` | vocab check, shared-code check, typecheck and unit tests together |
 
-CI (`.github/workflows/ci.yml`) runs all four checks.
+CI (`.github/workflows/ci.yml`) runs all of these checks.
 
 ## Architecture
 
@@ -69,8 +85,11 @@ src/
     analytics.ts       Dashboard and analytics calculations
     adaptive.ts        Personal response-time thresholds, retention-calibrated interval modifier
     weakness.ts        Automatic weak-word detection with reasons
+    ai/                AI tutor logic shared with the Edge Function: contract, prompts,
+                       output validation, learner context, mistake analysis, server flow
   services/
-    LearningStore.ts   Offline-first state and sync outbox (the only stateful service)
+    LearningStore.ts   Offline-first state and sync outbox
+    TutorService.ts    AI tutor calls with a per-user device cache of answers
   data/
     remote/            Supabase client, API implementation, row ↔ domain mappers
     storage.ts         Key-value storage abstraction (AsyncStorage in the app)
@@ -79,10 +98,12 @@ src/
   ui/                  Presentational components and theme
   app/                 Expo Router screens: tabs Home / Learn / Review / Analytics / AI Tutor / Library
 supabase/
-  migrations/          Schema, indexes, RLS, submit_review RPC
+  migrations/          Schema, indexes, RLS, submit_review RPC, AI tables
   seed.sql             Generated vocabulary upsert
+  functions/ai-tutor/  Edge Function (Deno): auth, OpenAI call, data access
+  functions/_shared/   Generated copy of src/domain/ai and its imports (npm run shared:sync)
 data/vocabulary.source.json   The one source of vocabulary data
-scripts/                      Vocabulary generator, database test runner
+scripts/                      Vocabulary generator, shared-code sync, database and Edge Function test runners
 tests/                        Jest tests and SQL tests
 ```
 
@@ -150,6 +171,59 @@ Simulated over 120 days with 60 words and an exponential-forgetting ground truth
 
 For strong learners, 120 days is too short for the longer intervals to reduce the review count (+3–6%). The tests bound that cost; no saving is claimed.
 
+## Phase 3: AI tutor
+
+The tutor never schedules reviews; scheduling stays with SM-2. The dictionary is the factual source, and AI output is validated before it is saved or shown.
+
+**Features** (AI Tutor tab, and "AI講師に聞く" on each word page)
+- **解説 (explanation):** nuance, usage, collocations, common mistakes, a memory tip and personal advice based on the learner's own wrong answers.
+- **例文 (examples):** three new sentences at the learner's level (proficiency 1–5).
+- **似た語と比べる (synonym comparison):** the target word against up to three others. Candidates are words the learner actually confused, near-synonyms in the dictionary, and listed synonyms.
+- **練習問題 (exercises):** fill-in-the-blank items. They are practice only and do not change the review schedule.
+- **文の中の意味 (meaning in context):** the learner pastes a sentence and gets the word's meaning there. The tutor says whether it matches a dictionary sense.
+- **間違いの分析 (mistake analysis):**
+  - Deterministic and offline (`ai/mistakes.ts`).
+  - Wrong multiple-choice answers are mapped back to the word they belong to, so "chose the meaning of *X* when asked about *Y*" becomes a confusion pair.
+  - Wrong spellings are classified: doubled letter, vowel, swapped letters, ending, missing or extra letter.
+  - Recommendations are app actions: compare, open word, weak-word session.
+  - "AIに学習アドバイスをもらう" sends these facts to the AI for coaching. The AI may only reference words from the analysis.
+
+**How a request is handled** (`ai/tutorCore.ts`, run by the Edge Function)
+1. Check the request, and verify the user's session with Supabase Auth.
+2. Read the dictionary and the learner's own data with the learner's JWT, so RLS applies.
+3. Build the prompt.
+   - Dictionary entries are passed as data.
+   - The learner context is computed from stored data: level, accuracy by skill, this word's history, recent wrong answers, confusions.
+   - A pasted sentence is passed as quoted data that the model must not follow.
+4. Reuse a stored answer when nothing relevant changed.
+   - The cache key includes the prompt text, so new mistakes produce a new answer.
+   - Cache hits do not count toward the limit.
+5. Reserve one request against the daily per-user limit, atomically.
+6. Call OpenAI with Structured Outputs (strict JSON schema).
+7. Validate the output (`ai/validate.ts`).
+   - Shape, lengths, Japanese where required, no links or markup.
+   - Example sentences must really use the word (inflections allowed).
+   - Exercise answers must be a form of the word. Distractors must not be its synonyms or same-group words. Answer positions must vary.
+   - A comparison must cover exactly the requested words.
+   - Recommendations may only use ids from the analysis.
+   - If validation fails, the errors are sent back for one corrected attempt. If that also fails, nothing is saved and the app shows an error.
+8. Save only validated content (`ai_generations`) and return it.
+
+**Security**
+- Only the server role can write `ai_generations`. Learners can read their own rows only, so a client cannot plant "AI content".
+- The usage log is not readable by clients.
+- The quota function is not callable by clients.
+- Deleting a user deletes their AI data.
+
+**Offline**
+- The device keeps the last 50 answers per user. If the network fails, the saved answer is shown and marked as such.
+- Before each request the app uploads pending reviews, so personalization uses the latest history.
+
+**Testing note**
+- The full path was run in a browser: app → `functions/v1/ai-tutor` → real handler, data access and OpenAI client.
+- Supabase and OpenAI were replaced by local fakes, and the fake model returned canned JSON.
+- Answer quality from a real OpenAI model has not been evaluated yet.
+
 ## Data model
 
 Static vocabulary (`words`) is separate from per-user data. There are four per-user tables:
@@ -183,9 +257,8 @@ Reliability rules:
 
 To change the vocabulary, edit the source file and run `npm run vocab:build`.
 
-## Not in Phase 1
+## Not implemented yet
 
-- **AI Tutor.** Phase 3. The plan is a Supabase Edge Function that holds the OpenAI key server-side; the app gets no key.
 - **Listening, sentence-completion, context and production questions.** Types and database checks already allow them.
 - **Forgetting-probability prediction.** Phase 4.
 - **Audio pronunciation and IPA data.**

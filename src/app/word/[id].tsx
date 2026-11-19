@@ -1,8 +1,8 @@
-import { useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import type { Competency } from '../../domain/types';
 import { WEAK_REASON_LABELS, detectWeakness } from '../../domain/weakness';
 import { useLearning } from '../../state/LearningProvider';
-import { Card, Loading, Row, Screen, SectionLabel, Stat, T, formatPct } from '../../ui/components';
+import { Button, Card, Loading, Row, Screen, SectionLabel, Stat, T, formatPct } from '../../ui/components';
 import { WordDetails } from '../../ui/WordDetails';
 import { formatWhen } from '../../ui/format';
 import { usePalette } from '../../ui/theme';
@@ -30,6 +30,7 @@ export default function WordScreen() {
     <Screen>
       <Card>
         <WordDetails word={word} />
+        <Button variant="secondary" label="AI講師に聞く" onPress={() => router.push({ pathname: '/tutor', params: { wordId: word.id } })} />
       </Card>
       <Card>
         <SectionLabel>あなたの記録</SectionLabel>

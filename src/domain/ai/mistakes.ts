@@ -1,0 +1,171 @@
+/**
+ * Deterministic mistake analysis (Phase 3). Pure; runs offline in the app and on
+ * the server, where its result is the factual input for AI coaching.
+ *
+ * - Confusions: a wrong multiple-choice answer is mapped back to the word it
+ *   belongs to, so "chose the meaning of X when asked about Y" becomes a pair.
+ * - Spelling slips: each wrong spelling is classified (doubled letter, vowel,
+ *   swapped letters, ending, missing / extra letter).
+ * - Recommendations are concrete actions the app can perform.
+ */
+import type { Competency, ReviewRecord, Word } from '../types';
+import { normalizeSpelling } from '../assessment/grading';
+
+export type SpellingPattern = 'double_letter' | 'transposition' | 'vowel' | 'ending' | 'missing_letter' | 'extra_letter' | 'other';
+
+export const SPELLING_PATTERN_LABELS: Record<SpellingPattern, string> = {
+  double_letter: '重ねる文字の間違い',
+  transposition: '文字の順番の入れ替わり',
+  vowel: '母音の間違い',
+  ending: '語尾の間違い',
+  missing_letter: '文字の抜け',
+  extra_letter: '余分な文字',
+  other: 'つづりの間違い',
+};
+
+export interface Confusion {
+  /** The word that was asked. */
+  wordId: string;
+  /** The word whose meaning / form was chosen instead. */
+  confusedWithId: string;
+  count: number;
+  lastAt: string;
+}
+
+export interface SpellingSlip {
+  wordId: string;
+  attempt: string;
+  pattern: SpellingPattern;
+  at: string;
+}
+
+export type RecommendationAction = 'compare' | 'review_word' | 'weak_session';
+
+export interface Recommendation {
+  action: RecommendationAction;
+  wordIds: string[];
+  reasonJa: string;
+}
+
+export interface MistakeAnalysis {
+  reviewsAnalyzed: number;
+  mistakes: number;
+  confusions: Confusion[];
+  spelling: SpellingSlip[];
+  /** Words answered "わからない" more than once. */
+  gaveUp: { wordId: string; count: number }[];
+  byCompetency: Partial<Record<Competency, { attempts: number; wrong: number }>>;
+  recommendations: Recommendation[];
+}
+
+/** Classify a wrong spelling against the correct word. */
+export function classifySpelling(target: string, attempt: string): SpellingPattern {
+  const t = normalizeSpelling(target);
+  const a = normalizeSpelling(attempt);
+  if (!a || a === t) return 'other';
+  const collapse = (s: string) => s.replace(/(.)\1+/g, '$1');
+  if (collapse(a) === collapse(t)) return 'double_letter';
+  if (a.length === t.length) {
+    const diff: number[] = [];
+    for (let i = 0; i < t.length; i++) if (a[i] !== t[i]) diff.push(i);
+    const [d0, d1] = diff;
+    if (diff.length === 2 && d0 !== undefined && d1 === d0 + 1 && a[d0] === t[d1] && a[d1] === t[d0]) return 'transposition';
+    const vowels = /[aeiouy]/;
+    if (diff.length > 0 && diff.every((i) => vowels.test(a[i] ?? '') && vowels.test(t[i] ?? ''))) return 'vowel';
+  }
+  const isSubsequence = (short: string, long: string) => {
+    let j = 0;
+    for (let i = 0; i < long.length && j < short.length; i++) if (long[i] === short[j]) j++;
+    return j === short.length;
+  };
+  if (a.length === t.length - 1 && isSubsequence(a, t)) return 'missing_letter';
+  if (a.length === t.length + 1 && isSubsequence(t, a)) return 'extra_letter';
+  let prefix = 0;
+  while (prefix < Math.min(a.length, t.length) && a[prefix] === t[prefix]) prefix++;
+  if (prefix >= 3 && prefix >= t.length - 4 && Math.abs(a.length - t.length) <= 2) return 'ending';
+  return 'other';
+}
+
+const MAX_CONFUSIONS = 8;
+const MAX_SLIPS = 8;
+
+export function analyzeMistakes(reviews: readonly ReviewRecord[], words: readonly Word[], maxReviews = 500): MistakeAnalysis {
+  const byId = new Map(words.map((w) => [w.id, w]));
+  const byJa = new Map<string, string>();
+  const byEn = new Map<string, string>();
+  for (const w of words) {
+    const ja = w.senses[0]?.ja;
+    if (ja && !byJa.has(ja)) byJa.set(ja, w.id);
+    byEn.set(w.word.toLowerCase(), w.id);
+  }
+
+  const recent = [...reviews].sort((a, b) => a.reviewedAt.localeCompare(b.reviewedAt)).slice(-maxReviews);
+  const pairs = new Map<string, Confusion>();
+  const slips: SpellingSlip[] = [];
+  const gaveUp = new Map<string, number>();
+  const byCompetency: MistakeAnalysis['byCompetency'] = {};
+  let mistakes = 0;
+
+  for (const r of recent) {
+    const stat = (byCompetency[r.competency] ??= { attempts: 0, wrong: 0 });
+    stat.attempts++;
+    if (r.isCorrect) continue;
+    stat.wrong++;
+    mistakes++;
+    const target = byId.get(r.wordId);
+    if (!target) continue;
+    if (r.userAnswer.trim() === '') {
+      gaveUp.set(r.wordId, (gaveUp.get(r.wordId) ?? 0) + 1);
+      continue;
+    }
+    if (r.questionType === 'en_to_ja_mc' || r.questionType === 'ja_to_en_mc') {
+      const other = r.questionType === 'en_to_ja_mc' ? byJa.get(r.userAnswer) : byEn.get(r.userAnswer.toLowerCase());
+      if (!other || other === r.wordId) continue;
+      // Store pairs order-independently: confusing A with B and B with A is one problem.
+      const [a, b] = [r.wordId, other].sort() as [string, string];
+      const key = `${a}|${b}`;
+      const prev = pairs.get(key);
+      if (prev) {
+        prev.count++;
+        prev.lastAt = r.reviewedAt;
+        prev.wordId = r.wordId;
+        prev.confusedWithId = other;
+      } else pairs.set(key, { wordId: r.wordId, confusedWithId: other, count: 1, lastAt: r.reviewedAt });
+    } else if (r.questionType === 'spelling') {
+      slips.push({ wordId: r.wordId, attempt: r.userAnswer, pattern: classifySpelling(target.word, r.userAnswer), at: r.reviewedAt });
+    }
+  }
+
+  const confusions = [...pairs.values()]
+    .sort((a, b) => b.count - a.count || b.lastAt.localeCompare(a.lastAt))
+    .slice(0, MAX_CONFUSIONS);
+  const spelling = slips.sort((a, b) => b.at.localeCompare(a.at)).slice(0, MAX_SLIPS);
+  const gaveUpList = [...gaveUp.entries()]
+    .filter(([, n]) => n >= 2)
+    .map(([wordId, count]) => ({ wordId, count }))
+    .sort((a, b) => b.count - a.count);
+
+  const recommendations: Recommendation[] = [];
+  const name = (id: string) => byId.get(id)?.word ?? '';
+  for (const c of confusions.slice(0, 3)) {
+    recommendations.push({
+      action: 'compare',
+      wordIds: [c.wordId, c.confusedWithId],
+      reasonJa: `「${name(c.wordId)}」と「${name(c.confusedWithId)}」を${c.count}回取り違えています。違いを確認しましょう。`,
+    });
+  }
+  const slipWords = [...new Set(spelling.map((s) => s.wordId))].slice(0, 2);
+  for (const id of slipWords) {
+    const s = spelling.find((x) => x.wordId === id)!;
+    recommendations.push({
+      action: 'review_word',
+      wordIds: [id],
+      reasonJa: `「${name(id)}」のつづり（${SPELLING_PATTERN_LABELS[s.pattern]}）を確認しましょう。`,
+    });
+  }
+  if (mistakes >= 3) {
+    recommendations.push({ action: 'weak_session', wordIds: [], reasonJa: '間違えた単語をまとめて練習しましょう。' });
+  }
+
+  return { reviewsAnalyzed: recent.length, mistakes, confusions, spelling, gaveUp: gaveUpList, byCompetency, recommendations };
+}

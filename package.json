@@ -37,7 +37,10 @@
     "test:db": "bash scripts/test-db.sh",
     "vocab:build": "node scripts/build-vocab.mjs",
     "vocab:check": "node scripts/build-vocab.mjs --check",
-    "verify": "npm run vocab:check && npm run typecheck && npm test -- --ci",
+    "shared:sync": "node scripts/sync-shared.mjs",
+    "shared:check": "node scripts/sync-shared.mjs --check",
+    "test:edge": "bash scripts/test-edge.sh",
+    "verify": "npm run vocab:check && npm run shared:check && npm run typecheck && npm test -- --ci",
     "web:page": "expo export --platform web --output-dir dist && node scripts/build-web-page.mjs dist dist/lexicore.html"
   },
   "private": true,

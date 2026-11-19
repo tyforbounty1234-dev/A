@@ -3,6 +3,7 @@ import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AuthProvider, useAuth } from '../state/AuthProvider';
 import { LearningProvider } from '../state/LearningProvider';
+import { TutorProvider } from '../state/TutorProvider';
 import { Loading } from '../ui/components';
 import { usePalette } from '../ui/theme';
 
@@ -39,8 +40,10 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <AuthProvider>
         <LearningProvider>
-          <StatusBar style="auto" />
-          <RootNavigator />
+          <TutorProvider>
+            <StatusBar style="auto" />
+            <RootNavigator />
+          </TutorProvider>
         </LearningProvider>
       </AuthProvider>
     </SafeAreaProvider>
