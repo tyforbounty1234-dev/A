@@ -29,6 +29,8 @@ If `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` are not set, the
 - **Needs the server:** the leaderboard, reactions, notifications, invites and AI answers. Those pages explain this.
 - Data is stored in that browser only (`localStorage`). It is not synced and is lost if the site data is cleared.
 
+`cd web && npm run build:single` packs local mode into one self-contained HTML file (`web/dist-single/lexicore.html`, about 0.7 MB) that can be opened or hosted anywhere. It uses hash URLs (`#/words/...`) in place of Next.js routing; `web/single/router.tsx` stands in for `next/link` and `next/navigation`.
+
 You can deploy to Vercel without any Supabase settings and share the URL. Everyone then studies on their own, and you can add Supabase later.
 
 ### Deploy (Supabase + Vercel, free tiers)
