@@ -52,12 +52,30 @@ describe('session planning', () => {
   const dueP = (id: string, overdue: number) =>
     progress(id, { reviewCount: 2, repetitions: 1, status: 'review', intervalDays: 1, nextReviewAt: at(now, -overdue * DAY).toISOString(), firstReviewedAt: T0.toISOString() });
 
-  it('learn session: card + recognition per word, then recall for each', () => {
+  it('learn session: all cards first, then a recognition round, then a recall round', () => {
     const plan = planLearnSession({ words: WORDS, progressByWord: new Map(), profile, now });
     expect(plan.newWordIds).toHaveLength(3);
     expect(plan.steps.map((s) => (s.kind === 'card' ? 'card' : s.questionType))).toEqual([
-      'card', 'en_to_ja_mc', 'card', 'en_to_ja_mc', 'card', 'en_to_ja_mc', 'ja_to_en_mc', 'ja_to_en_mc', 'ja_to_en_mc',
+      'card', 'card', 'card', 'en_to_ja_mc', 'en_to_ja_mc', 'en_to_ja_mc', 'ja_to_en_mc', 'ja_to_en_mc', 'ja_to_en_mc',
     ]);
+    const ids = (from: number) => plan.steps.slice(from, from + 3).map((s) => s.wordId);
+    expect(ids(0)).toEqual(plan.newWordIds);
+    // Each test round covers every new word exactly once.
+    expect([...ids(3)].sort()).toEqual([...plan.newWordIds].sort());
+    expect([...ids(6)].sort()).toEqual([...plan.newWordIds].sort());
+    // Deterministic for the same plan time.
+    expect(planLearnSession({ words: WORDS, progressByWord: new Map(), profile, now }).steps).toEqual(plan.steps);
+  });
+
+  it('learn session shuffles test order away from card order for some plan time', () => {
+    const big = { dailyNewWords: WORDS.length, dailyReviewLimit: 0 };
+    const differs = [0, 1, 2, 3, 4].some((h) => {
+      const p = planLearnSession({ words: WORDS, progressByWord: new Map(), profile: big, now: at(now, h * 3600_000) });
+      const cards = p.steps.filter((s) => s.kind === 'card').map((s) => s.wordId);
+      const rec = p.steps.filter((s) => s.kind === 'question' && s.questionType === 'en_to_ja_mc').map((s) => s.wordId);
+      return cards.join() !== rec.join();
+    });
+    expect(differs).toBe(true);
   });
 
   it('respects the daily new-word target across sessions', () => {
@@ -126,7 +144,9 @@ describe('session progression', () => {
   it('guards against answering a card or acknowledging a question', () => {
     const s = startSession(plan);
     expect(() => answerStep(s, true)).toThrow();
-    const s2 = acknowledgeCard(s);
+    let s2 = s;
+    while (currentStep(s2)?.kind === 'card') s2 = acknowledgeCard(s2);
+    expect(currentStep(s2)?.kind).toBe('question');
     expect(() => acknowledgeCard(s2)).toThrow();
   });
 });

@@ -102,6 +102,8 @@ The scheduler is SM-2 (SuperMemo 2) with four adjustments, each covered by tests
   - Plain SM-2 does shorten them. An end-to-end run showed it marking most new words "difficult" after one session.
 - **Early practice does not inflate intervals.** Answering a word correctly before it is due leaves its schedule unchanged.
 
+New words: the session shows every new word's card first, then tests all of them for recognition (英→日), then all for recall (日→英). Each test round is in a shuffled order, so the answer can't be guessed from the card order. A missed word is re-tested a few steps later.
+
 Queue priority:
 
 - Due words are ranked by how overdue they are *relative to their interval*.

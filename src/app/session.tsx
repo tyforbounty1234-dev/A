@@ -56,9 +56,19 @@ function SessionBody({ mode }: { mode: SessionMode }) {
 
         {view.kind === 'card' && (
           <Card>
-            <Pill label="NEW" tone="accent" />
+            <Row style={{ justifyContent: 'space-between' }}>
+              <Pill label="NEW" tone="accent" />
+              <T variant="small" color={c.muted}>{`${view.cardNumber} / ${view.cardCount}`}</T>
+            </Row>
             <WordDetails word={view.word} />
-            <Button label="覚えた。テストへ" onPress={next} />
+            {view.cardNumber < view.cardCount ? (
+              <Button label="覚えた。次の単語へ" onPress={next} />
+            ) : (
+              <>
+                <T variant="small" color={c.muted}>全部の単語を見ました。ここからまとめてテストします。</T>
+                <Button label="覚えた。テストを始める" onPress={next} />
+              </>
+            )}
           </Card>
         )}
 

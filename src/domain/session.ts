@@ -2,8 +2,9 @@
  * Study-session planning and progression (pure state machine).
  *
  * Daily workflow: scheduled reviews first (most overdue first), then new words.
- * A new word is introduced with a card, tested for recognition, and tested for
- * recall at the end of the session. Any wrong answer re-queues the word later in
+ * New words: every card is shown first, then all of them are tested for
+ * recognition, then all for recall (each test round in a shuffled order, so the
+ * answer cannot be guessed from the card order). Any wrong answer re-queues the word later in
  * the same session (up to MAX_RETRIES_PER_WORD times), which matches the
  * scheduler's short relearning step.
  */
@@ -12,6 +13,7 @@ import { PHASE1_COMPETENCIES } from './types';
 import { dueProgress, introducedOnDay, unseenWords } from './srs/queue';
 import { competenciesToReview, upgradeProgress, weakestCompetency } from './srs/competency';
 import { questionTypeFor } from './assessment/questions';
+import { hash01 } from './srs/sm2';
 import { detectWeakness, type Weakness } from './weakness';
 import type { Thresholds } from './adaptive';
 
@@ -110,14 +112,17 @@ export function planWeakSession(ctx: PlanContext & { thresholds?: Thresholds }, 
 
 export function planLearnSession(ctx: PlanContext, count = remainingNewWordsToday(ctx)): SessionPlan {
   const fresh = unseenWords(ctx.words, ctx.progressByWord).slice(0, Math.max(0, count));
-  const steps: SessionStep[] = [];
-  for (const w of fresh) {
-    steps.push({ kind: 'card', wordId: w.id });
-    steps.push({ kind: 'question', wordId: w.id, questionType: 'en_to_ja_mc', isRetry: false });
-  }
-  for (const w of fresh) {
-    steps.push({ kind: 'question', wordId: w.id, questionType: 'ja_to_en_mc', isRetry: false });
-  }
+  const seed = ctx.now.toISOString();
+  const shuffled = (round: string) =>
+    fresh
+      .map((w) => ({ w, k: hash01(`${seed}:${round}:${w.id}`) }))
+      .sort((a, b) => a.k - b.k)
+      .map(({ w }) => w);
+  const steps: SessionStep[] = [
+    ...fresh.map((w): SessionStep => ({ kind: 'card', wordId: w.id })),
+    ...shuffled('recognition').map((w): SessionStep => ({ kind: 'question', wordId: w.id, questionType: 'en_to_ja_mc', isRetry: false })),
+    ...shuffled('recall').map((w): SessionStep => ({ kind: 'question', wordId: w.id, questionType: 'ja_to_en_mc', isRetry: false })),
+  ];
   return { steps, reviewWordIds: [], newWordIds: fresh.map((w) => w.id) };
 }
 

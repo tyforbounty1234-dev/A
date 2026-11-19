@@ -33,7 +33,7 @@ export interface Feedback extends EvaluatedAnswer {
 export type SessionView =
   | { kind: 'empty' }
   | { kind: 'loading' }
-  | { kind: 'card'; word: Word; position: number; total: number }
+  | { kind: 'card'; word: Word; position: number; total: number; cardNumber: number; cardCount: number }
   | { kind: 'question'; word: Word; question: Question; position: number; total: number; feedback: Feedback | null }
   | { kind: 'done'; summary: SessionSummary };
 
@@ -176,7 +176,11 @@ export function useStudySession(mode: SessionMode) {
   let view: SessionView;
   if (plan.steps.length === 0) view = { kind: 'empty' };
   else if (isFinished(state)) view = { kind: 'done', summary: summarize(state) };
-  else if (step?.kind === 'card' && word) view = { kind: 'card', word, position, total };
+  else if (step?.kind === 'card' && word) {
+    const cards = state.steps.filter((s) => s.kind === 'card');
+    const cardNumber = state.steps.slice(0, state.index + 1).filter((s) => s.kind === 'card').length;
+    view = { kind: 'card', word, position, total, cardNumber, cardCount: cards.length };
+  }
   else if (step?.kind === 'question' && word && question) view = { kind: 'question', word, question, position, total, feedback };
   else view = { kind: 'loading' };
 
