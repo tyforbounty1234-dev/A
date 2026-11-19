@@ -1,0 +1,187 @@
+/**
+ * Drives one study session in the UI: plans it from current progress, builds
+ * questions, measures response time, records answers and completes the session.
+ * All rules live in the domain layer; this hook only wires them to React state.
+ * Platform-independent (used by the Expo app and the web app).
+ */
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { buildQuestion, type Question } from '../domain/assessment/questions';
+import { evaluateChoice, evaluateSpelling, type EvaluatedAnswer } from '../domain/assessment/evaluate';
+import {
+  acknowledgeCard,
+  answerStep,
+  currentStep,
+  isFinished,
+  planDailySession,
+  planLearnSession,
+  planReviewSession,
+  planWeakSession,
+  startSession,
+  summarize,
+  type SessionPlan,
+  type SessionState,
+  type SessionSummary,
+} from '../domain/session';
+import type { SessionMode, Word, WordProgress } from '../domain/types';
+import { DEFAULT_PROFILE } from '../domain/types';
+import type { LearningSnapshot, LearningStore } from '../services/LearningStore';
+
+export interface Feedback extends EvaluatedAnswer {
+  word: Word;
+  progressAfter: WordProgress;
+}
+
+export type SessionView =
+  | { kind: 'empty' }
+  | { kind: 'loading' }
+  | { kind: 'card'; word: Word; position: number; total: number; cardNumber: number; cardCount: number }
+  | { kind: 'question'; word: Word; question: Question; position: number; total: number; feedback: Feedback | null }
+  | { kind: 'done'; summary: SessionSummary };
+
+export function useStudySessionCore(store: LearningStore, snap: LearningSnapshot, mode: SessionMode) {
+  const [plan] = useState<SessionPlan>(() => {
+    const ctx = {
+      words: snap.words,
+      progressByWord: snap.progress,
+      profile: snap.profile ?? { id: '', ...DEFAULT_PROFILE },
+      now: new Date(),
+    };
+    if (mode === 'review') return planReviewSession(ctx);
+    if (mode === 'learn') return planLearnSession(ctx);
+    if (mode === 'weak') return planWeakSession({ ...ctx, thresholds: snap.adaptive.thresholds });
+    return planDailySession(ctx);
+  });
+  const [state, setState] = useState<SessionState>(() => startSession(plan));
+  const [feedback, setFeedback] = useState<Feedback | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const sessionId = useRef<string | null>(null);
+  const shownAt = useRef<number>(Date.now());
+  const completed = useRef(false);
+
+  // Create the session record once, if there is anything to study.
+  useEffect(() => {
+    if (plan.steps.length === 0 || sessionId.current) return;
+    store
+      .startSession(mode, plan.reviewWordIds.length)
+      .then((s) => (sessionId.current = s.id))
+      .catch((e) => setError(String(e)));
+  }, [store, mode, plan]);
+
+  const step = currentStep(state);
+  const word = step ? snap.wordsById.get(step.wordId) : undefined;
+
+  // Build the question for the current step (stable for the step's lifetime).
+  const question = useMemo<Question | null>(() => {
+    if (!step || step.kind !== 'question' || !word) return null;
+    try {
+      return buildQuestion(step.questionType, word, snap.words, Math.random);
+    } catch (e) {
+      console.warn('[session] could not build question', e);
+      return null;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.index, state.steps]);
+
+  useEffect(() => {
+    shownAt.current = Date.now();
+  }, [state.index]);
+
+  // Skip steps whose word disappeared from the library or could not be built.
+  useEffect(() => {
+    if (step && (!word || (step.kind === 'question' && !question))) {
+      setState((s) => ({ ...s, index: s.index + 1 }));
+    }
+  }, [step, word, question]);
+
+  // Complete the session when the last step is done.
+  useEffect(() => {
+    if (!isFinished(state) || completed.current || plan.steps.length === 0) return;
+    completed.current = true;
+    const sum = summarize(state);
+    const reviewSet = new Set(plan.reviewWordIds);
+    const completedReviews = new Set(state.results.filter((r) => reviewSet.has(r.wordId)).map((r) => r.wordId)).size;
+    const id = sessionId.current;
+    if (id) {
+      store
+        .completeSession(id, {
+          wordsStudied: sum.wordsStudied,
+          questionsAnswered: sum.questionsAnswered,
+          correctAnswers: sum.correctAnswers,
+          accuracy: sum.firstAttemptAccuracy,
+          completedReviews,
+        })
+        .catch((e) => setError(String(e)));
+    }
+  }, [state, plan, store]);
+
+  const record = useCallback(
+    async (evaluated: EvaluatedAnswer, responseTimeMs: number) => {
+      if (!step || step.kind !== 'question' || !word || feedback || busy) return;
+      setBusy(true);
+      try {
+        const { progress } = await store.recordAnswer({
+          wordId: word.id,
+          sessionId: sessionId.current,
+          questionType: step.questionType,
+          userAnswer: evaluated.userAnswer,
+          isCorrect: evaluated.isCorrect,
+          responseTimeMs,
+          quality: evaluated.quality,
+        });
+        setFeedback({ ...evaluated, word, progressAfter: progress });
+      } catch (e) {
+        setError('解答を保存できませんでした。もう一度お試しください。');
+        console.warn('[session] recordAnswer failed', e);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [step, word, feedback, busy, store],
+  );
+
+  const choose = useCallback(
+    (index: number | null) => {
+      if (question?.kind !== 'choice') return;
+      const rt = Date.now() - shownAt.current;
+      void record(evaluateChoice(question, index, rt, snap.adaptive.thresholds), rt);
+    },
+    [question, record, snap.adaptive.thresholds],
+  );
+
+  const spell = useCallback(
+    (input: string) => {
+      if (question?.kind !== 'spelling' || !word) return;
+      const rt = Date.now() - shownAt.current;
+      void record(evaluateSpelling(question, word, input, rt, snap.adaptive.thresholds), rt);
+    },
+    [question, word, record, snap.adaptive.thresholds],
+  );
+
+  const next = useCallback(() => {
+    if (!step) return;
+    if (step.kind === 'card') {
+      setState((s) => acknowledgeCard(s));
+      return;
+    }
+    if (!feedback) return;
+    const correct = feedback.isCorrect;
+    setFeedback(null);
+    setState((s) => answerStep(s, correct));
+  }, [step, feedback]);
+
+  const total = state.steps.length;
+  const position = Math.min(state.index + 1, total);
+  let view: SessionView;
+  if (plan.steps.length === 0) view = { kind: 'empty' };
+  else if (isFinished(state)) view = { kind: 'done', summary: summarize(state) };
+  else if (step?.kind === 'card' && word) {
+    const cards = state.steps.filter((s) => s.kind === 'card');
+    const cardNumber = state.steps.slice(0, state.index + 1).filter((s) => s.kind === 'card').length;
+    view = { kind: 'card', word, position, total, cardNumber, cardCount: cards.length };
+  }
+  else if (step?.kind === 'question' && word && question) view = { kind: 'question', word, question, position, total, feedback };
+  else view = { kind: 'loading' };
+
+  return { view, plan, choose, spell, next, busy, error };
+}

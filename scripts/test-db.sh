@@ -24,6 +24,8 @@ PSQL=(psql -X -q -v ON_ERROR_STOP=1 -h "$TMP" -p "$PORT" -U postgres -d postgres
 "${PSQL[@]}" -f tests/db/supabase_stub.sql
 for f in supabase/migrations/*.sql; do "${PSQL[@]}" -f "$f"; done
 "${PSQL[@]}" -f supabase/seed.sql
-"${PSQL[@]}" -f tests/db/schema.test.sql 2>&1 | sed -n -e 's/.*NOTICE:  //p' -e '/ERROR/p'
-test "${PIPESTATUS[0]}" -eq 0
+for t in tests/db/schema.test.sql tests/db/social.test.sql; do
+  "${PSQL[@]}" -f "$t" 2>&1 | sed -n -e 's/.*NOTICE:  //p' -e '/ERROR/p'
+  test "${PIPESTATUS[0]}" -eq 0
+done
 echo "database tests passed"

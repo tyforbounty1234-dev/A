@@ -15,9 +15,11 @@ begin
 end $$;
 
 -- Two users; the trigger must create their profiles.
-insert into auth.users (id, email) values
-  ('11111111-1111-1111-1111-111111111111', 'a@example.com'),
-  ('22222222-2222-2222-2222-222222222222', 'b@example.com');
+-- Registration is invite-only (social migration).
+insert into public.invite_codes (code, max_uses) values ('TESTCODE1', 100);
+insert into auth.users (id, email, raw_user_meta_data) values
+  ('11111111-1111-1111-1111-111111111111', 'a@example.com', '{"invite_code":"TESTCODE1","display_name":"Aki"}'),
+  ('22222222-2222-2222-2222-222222222222', 'b@example.com', '{"invite_code":"testcode1","display_name":"Ben"}');
 select pg_temp.check((select count(*) from public.profiles) = 2, 'profiles created by auth trigger');
 select pg_temp.check((select count(*) from public.words) = 203, 'seed loaded 203 words');
 
@@ -224,9 +226,9 @@ begin
   execute 'set role service_role';
 end $$;
 
-insert into auth.users (id, email) values
-  ('33333333-3333-3333-3333-333333333333', 'c@example.com'),
-  ('44444444-4444-4444-4444-444444444444', 'd@example.com');
+insert into auth.users (id, email, raw_user_meta_data) values
+  ('33333333-3333-3333-3333-333333333333', 'c@example.com', '{"invite_code":"TESTCODE1"}'),
+  ('44444444-4444-4444-4444-444444444444', 'd@example.com', '{"invite_code":"TESTCODE1"}');
 select pg_temp.as_service();
 select pg_temp.check(public.reserve_ai_request('33333333-3333-3333-3333-333333333333', 'examples', 2), 'service reserves 1st AI request');
 select pg_temp.check(public.reserve_ai_request('33333333-3333-3333-3333-333333333333', 'examples', 2), 'service reserves 2nd AI request');

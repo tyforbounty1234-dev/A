@@ -6,7 +6,42 @@ The goal is **long-term retention**, so the core of the app is a reliable spaced
 
 **Status:** Phase 1 (MVP), Phase 2 (memory optimization) and Phase 3 (AI tutor) are implemented. Phase 4 (forgetting-probability prediction) is not started.
 
-## Quick start
+## Web app (recommended): `web/`
+
+The community version of LexiCore is a **Next.js web app** for a small, invite-only group (friends, classmates). Members open a URL in any browser; no App Store, no install. The Expo app in the repository root is the earlier mobile prototype and is no longer the main target.
+
+**Features:** everything in the app below (learning, spaced repetition, progress, AI tutor, dashboard, analytics) plus:
+- **Invite-only registration.** Sign-up requires an invite code, checked inside the database. Members create codes on My Page (14 days, 5 people each) and share them as a link or QR code.
+- **LP (learning points).** 1 LP the first time a word is mastered. The database awards it, and only for a plausible history: at least 3 correct answers spread over at least 5 days.
+- **Leaderboard** (all time / last 7 days). Spending LP does not lower your rank.
+- **Shop** of reaction emotes bought with LP (two free ones). Emotes are kept forever.
+- **Reactions.** Send owned emotes to other members. Limits: 50 per day, 10 per day to the same person.
+- **Profiles** (icon, name, one-line bio, collection, emotes received) and **notifications** (emotes, LP, friends joining).
+
+LP, purchases, reactions and notifications are written only by database functions. Clients cannot change them directly (RLS and column grants; see `supabase/migrations/20261122000000_social.sql`).
+
+### Deploy (Supabase + Vercel, free tiers)
+
+1. **Supabase:** create a project. Apply the schema with `supabase link --project-ref <ref>`, `supabase db push` and `supabase db seed`, or run every file in `supabase/migrations/` and then `supabase/seed.sql` in the SQL editor.
+2. **First invite code:** the first person has no one to invite them, so create a code in the SQL editor:
+   ```sql
+   insert into public.invite_codes (code, max_uses) values ('MYCLASS2027', 30);
+   ```
+3. **Auth settings** (Authentication → URL Configuration): set **Site URL** to your Vercel URL.
+   - For the least setup, you can turn off **Confirm email** (Authentication → Providers → Email).
+   - With it on, each new member must click a link in an email first.
+4. **Vercel:** import the GitHub repository and set **Root Directory** to `web`.
+   - Add the environment variables `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` (the public anon key only).
+   - Deploy, then share the URL. Members invite each other from My Page.
+5. **Optional, AI tutor:** deploy the Edge Function as described in "Enabling the AI tutor" below. Without it the tutor page shows a "not configured" message; the offline mistake analysis still works.
+
+`web/src/lexicore/` is a generated copy of the platform-independent code in `src/` (scheduler, sessions, sync store, AI contract). Run `npm run shared:sync` after changing that code; CI fails if the copy is stale.
+
+Local development: `cd web && cp .env.example .env.local`, fill in the values, then `npm install` and `npm run dev`.
+
+## Mobile prototype (Expo)
+
+### Quick start
 
 ```bash
 npm install
@@ -63,10 +98,11 @@ Without these steps the app still works. The AI Tutor tab then shows the offline
 |---|---|
 | `npm run typecheck` | TypeScript strict mode, with `noUncheckedIndexedAccess` |
 | `npm test` | 146 Jest tests: domain logic, the offline sync store, 120-day simulated learners for adaptive scheduling, and the AI tutor (validation, prompts, server flow, client) |
-| `npm run test:db` | 45 database checks against a throwaway local PostgreSQL: RLS isolation, idempotency, ordering safety, immutable history, seed idempotency, AI content and quota rules |
+| `npm run test:db` | 98 database checks against a throwaway local PostgreSQL: RLS isolation, idempotency, ordering safety, immutable history, seed idempotency, AI content and quota rules, invite-only sign-up, LP awards, shop, reactions, notifications |
+| `cd web && npm run typecheck && npm run build` | The web app: strict TypeScript and a production build |
 | `npm run test:edge` | Deno typecheck and 8 tests of the `ai-tutor` function's HTTP layer and OpenAI client, against a local fake OpenAI server |
 | `npm run vocab:check` | The generated vocabulary files match `data/vocabulary.source.json` |
-| `npm run shared:check` | The Edge Function's copy of the shared code (`supabase/functions/_shared/lexicore`) matches `src/` |
+| `npm run shared:check` | The Edge Function's and the web app's copies of the shared code match `src/` |
 | `npm run verify` | vocab check, shared-code check, typecheck and unit tests together |
 
 CI (`.github/workflows/ci.yml`) runs all of these checks.

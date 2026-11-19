@@ -40,6 +40,8 @@
     "shared:sync": "node scripts/sync-shared.mjs",
     "shared:check": "node scripts/sync-shared.mjs --check",
     "test:edge": "bash scripts/test-edge.sh",
+    "web:dev": "npm --prefix web run dev",
+    "web:build": "npm --prefix web run build",
     "verify": "npm run vocab:check && npm run shared:check && npm run typecheck && npm test -- --ci",
     "web:page": "expo export --platform web --output-dir dist && node scripts/build-web-page.mjs dist dist/lexicore.html"
   },
