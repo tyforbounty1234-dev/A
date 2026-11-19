@@ -1,0 +1,176 @@
+-- Database tests: RLS isolation, idempotent review submission, ordering safety,
+-- immutability of history and seed idempotency. Any failed check raises an error.
+\set ON_ERROR_STOP on
+
+create or replace function pg_temp.check(cond boolean, msg text) returns void language plpgsql as $$
+begin
+  if cond is distinct from true then raise exception 'FAILED: %', msg; end if;
+  raise notice 'ok - %', msg;
+end $$;
+
+create or replace function pg_temp.as_user(uid uuid) returns void language plpgsql as $$
+begin
+  perform set_config('request.jwt.claim.sub', coalesce(uid::text, ''), false);
+  execute 'set role ' || case when uid is null then 'anon' else 'authenticated' end;
+end $$;
+
+-- Two users; the trigger must create their profiles.
+insert into auth.users (id, email) values
+  ('11111111-1111-1111-1111-111111111111', 'a@example.com'),
+  ('22222222-2222-2222-2222-222222222222', 'b@example.com');
+select pg_temp.check((select count(*) from public.profiles) = 2, 'profiles created by auth trigger');
+select pg_temp.check((select count(*) from public.words) = 203, 'seed loaded 203 words');
+
+-- Seed is idempotent.
+\i supabase/seed.sql
+select pg_temp.check((select count(*) from public.words) = 203, 'seed re-run does not duplicate words');
+
+-- ---------------------------------------------------------------- user A
+select pg_temp.as_user('11111111-1111-1111-1111-111111111111');
+select pg_temp.check((select count(*) from public.words) = 203, 'authenticated user can read words');
+select pg_temp.check((select count(*) from public.profiles) = 1, 'user sees only own profile');
+
+insert into public.study_sessions (id, mode, started_at, planned_reviews)
+values ('aaaaaaaa-0000-0000-0000-000000000001', 'learn', '2026-11-19T10:00:00Z', 0);
+
+select pg_temp.check(public.submit_review(
+  jsonb_build_object('id','aaaaaaaa-0000-0000-0000-0000000000a1','word_id','8c57149c-6089-5fe0-8594-3eba84f4092c',
+    'session_id','aaaaaaaa-0000-0000-0000-000000000001','question_type','en_to_ja_mc','competency','recognition',
+    'review_kind','new','user_answer','至る所にある','is_correct',true,'quality',5,'response_time',2100,
+    'reviewed_at','2026-11-19T10:01:00Z'),
+  jsonb_build_object('word_id','8c57149c-6089-5fe0-8594-3eba84f4092c','review_count',1,'correct_count',1,
+    'incorrect_count',0,'repetitions',1,'lapses',0,'ease_factor',2.6,'interval',1,'learning_status','review',
+    'first_reviewed_at','2026-11-19T10:01:00Z','last_reviewed_at','2026-11-19T10:01:00Z',
+    'next_review_at','2026-11-20T10:01:00Z','recent_results',jsonb_build_array(true),
+    'competency_scores', '{"recognition":{"attempts":1,"correct":1,"proficiency":1,"avgResponseMs":2100,"lastAt":"2026-11-19T10:01:00Z"}}'::jsonb)
+), 'first submit_review inserts');
+
+select pg_temp.check((select count(*) from public.reviews) = 1, 'review stored');
+select pg_temp.check((select session_id from public.reviews) = 'aaaaaaaa-0000-0000-0000-000000000001', 'review linked to session');
+select pg_temp.check((select ease_factor from public.word_progress) = 2.60, 'progress stored');
+select pg_temp.check((select recent_results from public.word_progress) = array[true], 'recent results stored');
+
+-- Retrying the same review id is a no-op.
+select pg_temp.check(public.submit_review(
+  jsonb_build_object('id','aaaaaaaa-0000-0000-0000-0000000000a1','word_id','8c57149c-6089-5fe0-8594-3eba84f4092c',
+    'session_id',null,'question_type','en_to_ja_mc','competency','recognition','review_kind','new',
+    'user_answer','x','is_correct',false,'quality',1,'response_time',100,'reviewed_at','2026-11-19T10:01:00Z'),
+  jsonb_build_object('word_id','8c57149c-6089-5fe0-8594-3eba84f4092c','review_count',99,'correct_count',0,
+    'incorrect_count',99,'repetitions',0,'lapses',0,'ease_factor',1.3,'interval',0,'learning_status','learning',
+    'last_reviewed_at','2026-11-19T10:01:00Z','recent_results','[]'::jsonb)
+) = false, 'duplicate review id returns false');
+select pg_temp.check((select review_count from public.word_progress) = 1, 'duplicate review does not change progress');
+
+-- A newer review applies; then an OLDER review arriving late must not roll progress back.
+select public.submit_review(
+  jsonb_build_object('id','aaaaaaaa-0000-0000-0000-0000000000a2','word_id','8c57149c-6089-5fe0-8594-3eba84f4092c',
+    'question_type','ja_to_en_mc','competency','recall','review_kind','scheduled','user_answer','ubiquitous',
+    'is_correct',true,'quality',4,'response_time',4000,'reviewed_at','2026-11-20T10:05:00Z'),
+  jsonb_build_object('word_id','8c57149c-6089-5fe0-8594-3eba84f4092c','review_count',2,'correct_count',2,
+    'incorrect_count',0,'repetitions',2,'lapses',0,'ease_factor',2.6,'interval',6,'learning_status','review',
+    'first_reviewed_at','2026-11-19T10:01:00Z','last_reviewed_at','2026-11-20T10:05:00Z',
+    'next_review_at','2026-11-26T10:05:00Z','recent_results',jsonb_build_array(true,true),'competency_scores','{}'::jsonb));
+select public.submit_review(
+  jsonb_build_object('id','aaaaaaaa-0000-0000-0000-0000000000a3','word_id','8c57149c-6089-5fe0-8594-3eba84f4092c',
+    'question_type','spelling','competency','spelling','review_kind','practice','user_answer','ubiquitus',
+    'is_correct',false,'quality',2,'response_time',9000,'reviewed_at','2026-11-19T12:00:00Z'),
+  jsonb_build_object('word_id','8c57149c-6089-5fe0-8594-3eba84f4092c','review_count',2,'correct_count',1,
+    'incorrect_count',1,'repetitions',0,'lapses',1,'ease_factor',2.3,'interval',0.007,'learning_status','relearning',
+    'first_reviewed_at','2026-11-19T10:01:00Z','last_reviewed_at','2026-11-19T12:00:00Z',
+    'next_review_at','2026-11-19T12:10:00Z','recent_results',jsonb_build_array(true,false),'competency_scores','{}'::jsonb));
+select pg_temp.check((select interval from public.word_progress) = 6, 'late older review does not roll back schedule');
+select pg_temp.check((select count(*) from public.reviews) = 3, 'late older review is still kept in history');
+
+-- Review missing a synced session keeps the answer with session_id null.
+select public.submit_review(
+  jsonb_build_object('id','aaaaaaaa-0000-0000-0000-0000000000a4','word_id','4aedfc17-b89a-5c9f-ac13-7c8eb1a77409',
+    'session_id','aaaaaaaa-0000-0000-0000-00000000dead','question_type','en_to_ja_mc','competency','recognition',
+    'review_kind','new','user_answer','x','is_correct',false,'quality',1,'response_time',5000,
+    'reviewed_at','2026-11-19T10:02:00Z'),
+  jsonb_build_object('word_id','4aedfc17-b89a-5c9f-ac13-7c8eb1a77409','review_count',1,'correct_count',0,
+    'incorrect_count',1,'repetitions',0,'lapses',0,'ease_factor',2.04,'interval',0.00694,'learning_status','learning',
+    'first_reviewed_at','2026-11-19T10:02:00Z','last_reviewed_at','2026-11-19T10:02:00Z',
+    'next_review_at','2026-11-19T10:12:00Z','recent_results',jsonb_build_array(false),'competency_scores','{}'::jsonb));
+select pg_temp.check((select session_id from public.reviews where id = 'aaaaaaaa-0000-0000-0000-0000000000a4') is null,
+  'review with unknown session is kept with null session');
+
+-- History is immutable for clients.
+do $$ begin
+  begin
+    delete from public.reviews;
+    raise exception 'delete should have failed';
+  exception when insufficient_privilege then null;
+  end;
+  begin
+    update public.reviews set is_correct = true;
+    raise exception 'update should have failed';
+  exception when insufficient_privilege then null;
+  end;
+end $$;
+select pg_temp.check(true, 'reviews cannot be deleted or edited');
+
+do $$ begin
+  begin
+    update public.words set word = 'hacked';
+    raise exception 'word update should have failed';
+  exception when insufficient_privilege then null;
+  end;
+end $$;
+select pg_temp.check(true, 'words are read-only for users');
+
+-- A user cannot write rows for someone else.
+do $$ begin
+  begin
+    insert into public.word_progress (user_id, word_id)
+    values ('22222222-2222-2222-2222-222222222222', '8c57149c-6089-5fe0-8594-3eba84f4092c');
+    raise exception 'cross-user insert should have failed';
+  exception when insufficient_privilege then null;
+  end;
+end $$;
+select pg_temp.check(true, 'cannot insert progress for another user');
+
+-- Profile settings validation.
+update public.profiles set daily_new_words = 15, daily_target = 30;
+select pg_temp.check((select daily_new_words from public.profiles) = 15, 'user can update own targets');
+do $$ begin
+  begin
+    update public.profiles set daily_new_words = 1000;
+    raise exception 'invalid target should have failed';
+  exception when check_violation then null;
+  end;
+end $$;
+select pg_temp.check(true, 'invalid daily target rejected');
+
+-- ---------------------------------------------------------------- user B
+reset role;
+select pg_temp.as_user('22222222-2222-2222-2222-222222222222');
+select pg_temp.check((select count(*) from public.reviews) = 0, 'user B cannot see user A reviews');
+select pg_temp.check((select count(*) from public.word_progress) = 0, 'user B cannot see user A progress');
+select pg_temp.check((select count(*) from public.study_sessions) = 0, 'user B cannot see user A sessions');
+update public.word_progress set interval = 999;
+reset role;
+select pg_temp.check((select interval from public.word_progress
+  where user_id = '11111111-1111-1111-1111-111111111111' and word_id = '8c57149c-6089-5fe0-8594-3eba84f4092c') = 6,
+  'user B cannot modify user A progress');
+
+-- ---------------------------------------------------------------- anon
+select pg_temp.as_user(null);
+do $$ begin
+  begin
+    perform count(*) from public.words;
+    raise exception 'anon read should have failed';
+  exception when insufficient_privilege then null;
+  end;
+  begin
+    perform public.submit_review('{}'::jsonb, '{}'::jsonb);
+    raise exception 'anon rpc should have failed';
+  exception when insufficient_privilege then null;
+  end;
+end $$;
+reset role;
+select pg_temp.check(true, 'anonymous clients cannot read data or submit reviews');
+
+-- Deleting an auth user removes their learning data (account deletion).
+delete from auth.users where id = '11111111-1111-1111-1111-111111111111';
+select pg_temp.check((select count(*) from public.reviews) = 0, 'account deletion cascades to history');
+select pg_temp.check((select count(*) from public.words) = 203, 'account deletion keeps shared words');

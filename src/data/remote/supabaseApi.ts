@@ -1,0 +1,106 @@
+import type { SupabaseClient } from '@supabase/supabase-js';
+import type { ReviewRecord, StudySession, UserProfile, Word, WordProgress } from '../../domain/types';
+import { classifyError, type RemoteApi } from './api';
+import {
+  profileFromRow,
+  profilePatchToRow,
+  progressFromRow,
+  progressToRpc,
+  reviewFromRow,
+  reviewToRpc,
+  sessionFromRow,
+  sessionToRow,
+  wordFromRow,
+  type ProfileRow,
+  type ProgressRow,
+  type ReviewRow,
+  type SessionRow,
+  type WordRow,
+} from './mappers';
+
+const PAGE = 1000;
+
+/** Fetch every row of a query in pages (PostgREST caps responses at 1000 rows by default). */
+async function fetchAll<T>(page: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown }>): Promise<T[]> {
+  const out: T[] = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await page(from, from + PAGE - 1);
+    if (error) throw classifyError(error);
+    const rows = data ?? [];
+    out.push(...rows);
+    if (rows.length < PAGE) return out;
+  }
+}
+
+export class SupabaseApi implements RemoteApi {
+  constructor(private readonly db: SupabaseClient) {}
+
+  async fetchWords(): Promise<Word[]> {
+    const rows = await fetchAll<WordRow>((a, b) => this.db.from('words').select('*').order('rank').range(a, b));
+    return rows.map(wordFromRow).filter((w): w is Word => w !== null);
+  }
+
+  async fetchProfile(userId: string): Promise<UserProfile | null> {
+    const { data, error } = await this.db.from('profiles').select('*').eq('id', userId).maybeSingle<ProfileRow>();
+    if (error) throw classifyError(error);
+    return data ? profileFromRow(data) : null;
+  }
+
+  async updateProfile(userId: string, patch: Partial<Omit<UserProfile, 'id'>>): Promise<UserProfile> {
+    const { data, error } = await this.db
+      .from('profiles')
+      .update(profilePatchToRow(patch))
+      .eq('id', userId)
+      .select('*')
+      .single<ProfileRow>();
+    if (error) throw classifyError(error);
+    return profileFromRow(data);
+  }
+
+  async fetchProgress(userId: string): Promise<WordProgress[]> {
+    const rows = await fetchAll<ProgressRow>((a, b) =>
+      this.db.from('word_progress').select('*').eq('user_id', userId).order('word_id').range(a, b),
+    );
+    return rows.map(progressFromRow);
+  }
+
+  async fetchReviews(userId: string, sinceIso: string): Promise<ReviewRecord[]> {
+    const rows = await fetchAll<ReviewRow>((a, b) =>
+      this.db
+        .from('reviews')
+        .select('*')
+        .eq('user_id', userId)
+        .gte('reviewed_at', sinceIso)
+        .order('reviewed_at', { ascending: true })
+        .order('id', { ascending: true })
+        .range(a, b),
+    );
+    return rows.map(reviewFromRow);
+  }
+
+  async fetchSessions(userId: string, sinceIso: string): Promise<StudySession[]> {
+    const rows = await fetchAll<SessionRow>((a, b) =>
+      this.db
+        .from('study_sessions')
+        .select('*')
+        .eq('user_id', userId)
+        .gte('started_at', sinceIso)
+        .order('started_at', { ascending: true })
+        .range(a, b),
+    );
+    return rows.map(sessionFromRow);
+  }
+
+  async submitReview(review: ReviewRecord, progress: WordProgress): Promise<void> {
+    const { error } = await this.db.rpc('submit_review', {
+      p_review: reviewToRpc(review),
+      p_progress: progressToRpc(progress),
+    });
+    if (error) throw classifyError(error);
+  }
+
+  async upsertSession(session: StudySession): Promise<void> {
+    const { error } = await this.db.from('study_sessions').upsert(sessionToRow(session), { onConflict: 'id' });
+    if (error) throw classifyError(error);
+  }
+}

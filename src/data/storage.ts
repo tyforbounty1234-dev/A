@@ -1,0 +1,37 @@
+/**
+ * Small key-value persistence abstraction so services can be tested without a device.
+ */
+export interface KeyValueStorage {
+  getItem(key: string): Promise<string | null>;
+  setItem(key: string, value: string): Promise<void>;
+  removeItem(key: string): Promise<void>;
+}
+
+export class MemoryStorage implements KeyValueStorage {
+  readonly data = new Map<string, string>();
+  async getItem(key: string) {
+    return this.data.get(key) ?? null;
+  }
+  async setItem(key: string, value: string) {
+    this.data.set(key, value);
+  }
+  async removeItem(key: string) {
+    this.data.delete(key);
+  }
+}
+
+/** Read JSON, returning `fallback` when missing or corrupt (corrupt values are logged, not thrown). */
+export async function readJson<T>(storage: KeyValueStorage, key: string, fallback: T): Promise<T> {
+  try {
+    const raw = await storage.getItem(key);
+    if (raw === null) return fallback;
+    return JSON.parse(raw) as T;
+  } catch (e) {
+    console.warn(`[storage] could not read ${key}`, e);
+    return fallback;
+  }
+}
+
+export async function writeJson(storage: KeyValueStorage, key: string, value: unknown): Promise<void> {
+  await storage.setItem(key, JSON.stringify(value));
+}

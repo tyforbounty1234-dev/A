@@ -1,0 +1,46 @@
+/**
+ * Remote data API used by the learning store. The Supabase implementation lives
+ * in supabaseApi.ts; tests use an in-memory fake.
+ */
+import type { ReviewRecord, StudySession, UserProfile, Word, WordProgress } from '../../domain/types';
+
+export interface RemoteApi {
+  fetchWords(): Promise<Word[]>;
+  fetchProfile(userId: string): Promise<UserProfile | null>;
+  updateProfile(userId: string, patch: Partial<Omit<UserProfile, 'id'>>): Promise<UserProfile>;
+  fetchProgress(userId: string): Promise<WordProgress[]>;
+  fetchReviews(userId: string, sinceIso: string): Promise<ReviewRecord[]>;
+  fetchSessions(userId: string, sinceIso: string): Promise<StudySession[]>;
+  /** Atomic and idempotent: re-sending the same review id is a no-op. */
+  submitReview(review: ReviewRecord, progress: WordProgress): Promise<void>;
+  upsertSession(session: StudySession): Promise<void>;
+}
+
+/** Error raised by the API layer, classified for retry decisions. */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly retryable: boolean,
+    readonly code?: string,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
+/**
+ * Classify an error from PostgREST / fetch.
+ * Data errors (invalid input, constraint violations, permission) will fail the
+ * same way every time, so they must not block the sync queue forever.
+ */
+export function classifyError(e: unknown): ApiError {
+  if (e instanceof ApiError) return e;
+  const err = e as { message?: string; code?: string; status?: number } | null;
+  const message = err?.message ?? String(e);
+  const code = err?.code;
+  if (code && /^(22|23|42)/.test(code)) return new ApiError(message, false, code);
+  if (err?.status && err.status >= 400 && err.status < 500 && err.status !== 401 && err.status !== 408 && err.status !== 429) {
+    return new ApiError(message, false, code ?? String(err.status));
+  }
+  return new ApiError(message, true, code);
+}
