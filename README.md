@@ -23,6 +23,15 @@ Without Supabase settings the app runs in **local mode**:
 
 This is the fastest way to try the app.
 
+### Single-page web version (iPad / Safari, no computer needed)
+
+`npm run web:page` exports the web build and packs it into one self-contained file, `dist/lexicore.html`.
+- All JavaScript, the icon font and the images are inlined. The page makes no network requests.
+- It can be hosted anywhere and opened in Safari. Use "Add to Home Screen" to launch it like an app.
+- It runs in local mode, so progress is stored in that browser only.
+- Route code-splitting is disabled on web (`asyncRoutes: false`) so the whole app is in one bundle.
+- `src/app/+not-found.tsx` sends unknown URLs to Home, so the page works under any URL path.
+
 ### Connecting Supabase (accounts and cloud sync)
 
 1. Create a Supabase project.

@@ -3,7 +3,7 @@ import NetInfo from '@react-native-community/netinfo';
 import { randomUUID } from 'expo-crypto';
 import { createContext, useContext, useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { AppState } from 'react-native';
-import { getSupabase } from '../data/remote/supabaseClient';
+import { getSupabase, isSupabaseConfigured } from '../data/remote/supabaseClient';
 import { SupabaseApi } from '../data/remote/supabaseApi';
 import type { Word } from '../domain/types';
 import { LearningStore, type LearningSnapshot } from '../services/LearningStore';
@@ -33,7 +33,9 @@ export function LearningProvider({ children }: { children: ReactNode }) {
   }, [store, userId]);
 
   // Sync when connectivity returns and when the app comes to the foreground.
+  // Local mode has nothing to sync, so it does not probe the network at all.
   useEffect(() => {
+    if (!isSupabaseConfigured) return;
     const unsubNet = NetInfo.addEventListener((s) => {
       if (s.isConnected && s.isInternetReachable !== false) void store.flush();
     });

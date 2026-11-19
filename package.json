@@ -37,7 +37,8 @@
     "test:db": "bash scripts/test-db.sh",
     "vocab:build": "node scripts/build-vocab.mjs",
     "vocab:check": "node scripts/build-vocab.mjs --check",
-    "verify": "npm run vocab:check && npm run typecheck && npm test -- --ci"
+    "verify": "npm run vocab:check && npm run typecheck && npm test -- --ci",
+    "web:page": "expo export --platform web --output-dir dist && node scripts/build-web-page.mjs dist dist/lexicore.html"
   },
   "private": true,
   "jest": {
