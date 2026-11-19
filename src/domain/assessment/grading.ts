@@ -67,6 +67,8 @@ export interface GradeInput {
   gaveUp?: boolean;
   /** Spelling only: the wrong answer was one edit away. */
   nearMiss?: boolean;
+  /** Personal [fast, slow] thresholds; defaults to RESPONSE_THRESHOLDS. */
+  thresholds?: Record<QuestionType, readonly [number, number]>;
 }
 
 /**
@@ -77,7 +79,7 @@ export interface GradeInput {
 export function gradeToQuality(input: GradeInput): Quality {
   if (input.gaveUp) return 0;
   if (!input.isCorrect) return input.nearMiss ? 2 : 1;
-  const [fast, slow] = RESPONSE_THRESHOLDS[input.questionType];
+  const [fast, slow] = (input.thresholds ?? RESPONSE_THRESHOLDS)[input.questionType];
   const rt = Math.max(0, input.responseTimeMs);
   if (rt <= fast) return 5;
   if (rt <= slow) return 4;

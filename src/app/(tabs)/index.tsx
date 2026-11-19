@@ -3,7 +3,7 @@ import { Link, router } from 'expo-router';
 import { useMemo } from 'react';
 import { Pressable, View } from 'react-native';
 import { dashboardSummary, nextReviewTime } from '../../domain/analytics';
-import { remainingNewWordsToday } from '../../domain/session';
+import { rankWeakWords, remainingNewWordsToday } from '../../domain/session';
 import { DEFAULT_PROFILE } from '../../domain/types';
 import { useLearning } from '../../state/LearningProvider';
 import { Button, Card, Loading, ProgressBar, Row, Screen, SectionLabel, Stat, T, formatPct } from '../../ui/components';
@@ -20,6 +20,7 @@ export default function Home() {
     () => dashboardSummary(progress, snap.reviews, snap.words.length, new Date()),
     [progress, snap.reviews, snap.words.length],
   );
+  const weakCount = useMemo(() => rankWeakWords(progress, snap.adaptive.thresholds).length, [progress, snap.adaptive.thresholds]);
   if (!snap.ready) return <Loading />;
 
   const profile = snap.profile ?? { id: '', ...DEFAULT_PROFILE };
@@ -79,6 +80,19 @@ export default function Home() {
           onPress={() => router.push('/session?mode=learn')}
         />
       </Card>
+
+      {weakCount > 0 && (
+        <Card>
+          <SectionLabel>苦手な単語</SectionLabel>
+          <T>
+            <T variant="heading">{weakCount}</T> 語が苦手として見つかりました
+          </T>
+          <T variant="small" color={c.muted}>
+            よく忘れる・迷いがち・つづりだけ弱い、などの単語を、いちばん弱い力でまとめて練習します。
+          </T>
+          <Button variant="secondary" label="苦手を集中練習" onPress={() => router.push('/session?mode=weak')} />
+        </Card>
+      )}
 
       <Card>
         <Row>

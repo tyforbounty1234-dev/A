@@ -174,3 +174,45 @@ select pg_temp.check(true, 'anonymous clients cannot read data or submit reviews
 delete from auth.users where id = '11111111-1111-1111-1111-111111111111';
 select pg_temp.check((select count(*) from public.reviews) = 0, 'account deletion cascades to history');
 select pg_temp.check((select count(*) from public.words) = 203, 'account deletion keeps shared words');
+
+-- ---------------------------------------------------------------- Phase 2
+select pg_temp.as_user('22222222-2222-2222-2222-222222222222');
+insert into public.study_sessions (id, mode, started_at) values ('bbbbbbbb-0000-0000-0000-000000000001', 'weak', now());
+select pg_temp.check((select mode from public.study_sessions where id = 'bbbbbbbb-0000-0000-0000-000000000001') = 'weak',
+  'weak practice sessions are accepted');
+do $$ begin
+  begin
+    insert into public.study_sessions (id, mode, started_at) values ('bbbbbbbb-0000-0000-0000-000000000002', 'bogus', now());
+    raise exception 'invalid mode should have failed';
+  exception when check_violation then null;
+  end;
+end $$;
+reset role;
+select pg_temp.check(true, 'unknown session modes are still rejected');
+
+-- adaptive fields are stored by submit_review
+select pg_temp.as_user('22222222-2222-2222-2222-222222222222');
+select public.submit_review(
+  jsonb_build_object('id','bbbbbbbb-0000-0000-0000-0000000000c1','word_id','4aedfc17-b89a-5c9f-ac13-7c8eb1a77409',
+    'session_id','bbbbbbbb-0000-0000-0000-000000000001','question_type','spelling','competency','spelling',
+    'review_kind','scheduled','user_answer','ephemeral','is_correct',true,'quality',4,'response_time',5000,
+    'reviewed_at','2026-11-25T10:00:00Z','prev_interval',6,'applied_modifier',1.12),
+  jsonb_build_object('word_id','4aedfc17-b89a-5c9f-ac13-7c8eb1a77409','review_count',1,'correct_count',1,
+    'incorrect_count',0,'repetitions',3,'lapses',0,'ease_factor',2.5,'interval',17,'learning_status','review',
+    'first_reviewed_at','2026-11-19T10:00:00Z','last_reviewed_at','2026-11-25T10:00:00Z',
+    'next_review_at','2026-12-12T10:00:00Z','recent_results',jsonb_build_array(true),
+    'competency_scores','{"spelling":{"attempts":1,"correct":1,"proficiency":0.8,"avgResponseMs":5000,"lastAt":null,"srs":{"repetitions":3,"lapses":0,"easeFactor":2.5,"intervalDays":17,"status":"review","lastReviewedAt":"2026-11-25T10:00:00Z","nextReviewAt":"2026-12-12T10:00:00Z","modifier":1.12}}}'::jsonb));
+select pg_temp.check((select prev_interval = 6 and abs(applied_modifier - 1.12) < 0.001 from public.reviews
+  where id = 'bbbbbbbb-0000-0000-0000-0000000000c1'), 'submit_review stores adaptive fields');
+select pg_temp.check((select competency_scores->'spelling'->'srs'->>'intervalDays' from public.word_progress
+  where word_id = '4aedfc17-b89a-5c9f-ac13-7c8eb1a77409') = '17', 'per-competency schedule stored in progress');
+select public.submit_review(
+  jsonb_build_object('id','bbbbbbbb-0000-0000-0000-0000000000c2','word_id','4aedfc17-b89a-5c9f-ac13-7c8eb1a77409',
+    'question_type','en_to_ja_mc','competency','recognition','review_kind','new','user_answer','x','is_correct',true,
+    'quality',5,'response_time',900,'reviewed_at','2026-11-25T10:01:00Z'),
+  jsonb_build_object('word_id','4aedfc17-b89a-5c9f-ac13-7c8eb1a77409','review_count',2,'correct_count',2,
+    'incorrect_count',0,'repetitions',1,'lapses',0,'ease_factor',2.5,'interval',1,'learning_status','review',
+    'last_reviewed_at','2026-11-25T10:01:00Z','next_review_at','2026-11-26T10:01:00Z','recent_results',jsonb_build_array(true,true)));
+select pg_temp.check((select prev_interval is null and applied_modifier is null from public.reviews
+  where id = 'bbbbbbbb-0000-0000-0000-0000000000c2'), 'reviews without adaptive fields are still accepted');
+reset role;

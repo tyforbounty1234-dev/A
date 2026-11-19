@@ -1,5 +1,5 @@
 import { applyAnswer, isDifficult, reviewKindFor } from '../../src/domain/srs/progress';
-import { chooseCompetency, dueProgress, introducedOnDay, unseenWords } from '../../src/domain/srs/queue';
+import { dueProgress, introducedOnDay, unseenWords } from '../../src/domain/srs/queue';
 import { DAY, T0, USER, WORDS, at, progress } from '../helpers';
 
 const answer = (over: Partial<Parameters<typeof applyAnswer>[1]> = {}) => ({
@@ -22,13 +22,14 @@ describe('applyAnswer', () => {
     expect(p.reviewCount).toBe(1);
     expect(p.correctCount).toBe(1);
     expect(p.firstReviewedAt).toBe(T0.toISOString());
-    expect(p.competencyScores.recognition).toEqual({
+    expect(p.competencyScores.recognition).toMatchObject({
       attempts: 1,
       correct: 1,
       proficiency: 1,
       avgResponseMs: 2000,
       lastAt: T0.toISOString(),
     });
+    expect(p.competencyScores.recognition?.srs).toMatchObject({ repetitions: 1, intervalDays: 1, status: 'review' });
     expect(review).toMatchObject({ competency: 'recognition', kind: 'new', quality: 5, isCorrect: true });
   });
 
@@ -62,10 +63,11 @@ describe('applyAnswer', () => {
 
   it('classifies review kinds', () => {
     const p1 = applyAnswer(undefined, answer()).progress;
-    expect(reviewKindFor(p1, at(T0, 60_000))).toBe('practice');
-    expect(reviewKindFor(p1, at(T0, DAY + 1))).toBe('scheduled');
+    expect(reviewKindFor(p1, 'recognition', at(T0, 60_000))).toBe('practice');
+    expect(reviewKindFor(p1, 'recognition', at(T0, DAY + 1))).toBe('scheduled');
+    expect(reviewKindFor(p1, 'spelling', at(T0, DAY + 1))).toBe('new');
     const failed = applyAnswer(p1, answer({ id: 'r2', isCorrect: false, quality: 1, now: at(T0, DAY) })).progress;
-    expect(reviewKindFor(failed, at(T0, DAY + 600_000))).toBe('relearn');
+    expect(reviewKindFor(failed, 'recognition', at(T0, DAY + 600_000))).toBe('relearn');
   });
 });
 
@@ -126,19 +128,3 @@ describe('review queue', () => {
   });
 });
 
-describe('chooseCompetency', () => {
-  const all = ['recognition', 'recall', 'spelling'] as const;
-  it('tests recognition first and holds spelling back until recognised', () => {
-    expect(chooseCompetency(undefined, all)).toBe('recognition');
-    const p = progress('w', {
-      competencyScores: { recognition: { attempts: 1, correct: 0, proficiency: 0.2, avgResponseMs: 1, lastAt: null } },
-    });
-    expect(chooseCompetency(p, all)).toBe('recall');
-  });
-
-  it('picks the weakest competency', () => {
-    const s = (proficiency: number) => ({ attempts: 2, correct: 1, proficiency, avgResponseMs: 1, lastAt: null });
-    const p = progress('w', { competencyScores: { recognition: s(0.9), recall: s(0.7), spelling: s(0.3) } });
-    expect(chooseCompetency(p, all)).toBe('spelling');
-  });
-});

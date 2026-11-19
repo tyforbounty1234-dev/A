@@ -4,7 +4,7 @@ Mobile-first English vocabulary app for Japanese students preparing for highly c
 
 The goal is **long-term retention**, so the core of the app is a reliable spaced-repetition engine. Feature count and study time are secondary.
 
-**Status:** Phase 1 (MVP) is implemented. AI features (Phase 3) are not implemented yet; the AI Tutor tab is a placeholder.
+**Status:** Phase 1 (MVP) and Phase 2 (memory optimization) are implemented. AI features (Phase 3) are not implemented yet; the AI Tutor tab is a placeholder.
 
 ## Quick start
 
@@ -39,8 +39,8 @@ Only the public anon key goes in the app. Every table is protected by Row Level 
 | Command | What it checks |
 |---|---|
 | `npm run typecheck` | TypeScript strict mode, with `noUncheckedIndexedAccess` |
-| `npm test` | 81 Jest tests: domain logic plus the offline sync store |
-| `npm run test:db` | 26 database checks against a throwaway local PostgreSQL: RLS isolation, idempotency, ordering safety, immutable history, seed idempotency |
+| `npm test` | 100 Jest tests: domain logic, the offline sync store, and 120-day simulated learners for adaptive scheduling |
+| `npm run test:db` | 33 database checks against a throwaway local PostgreSQL: RLS isolation, idempotency, ordering safety, immutable history, seed idempotency |
 | `npm run vocab:check` | The generated vocabulary files match `data/vocabulary.source.json` |
 | `npm run verify` | vocab check, typecheck and unit tests together |
 
@@ -51,12 +51,15 @@ CI (`.github/workflows/ci.yml`) runs all four checks.
 ```
 src/
   domain/          Pure TypeScript: no React, no I/O. All learning rules live here.
-    srs/sm2.ts         SM-2 scheduler
+    srs/sm2.ts         SM-2 scheduler (+ interval modifier, late-review credit, fuzz)
+    srs/competency.ts  Per-competency schedules, aggregation, legacy upgrade
     srs/progress.ts    Applies one answer to a word's progress and competency scores
     srs/queue.ts       Due queue ordering, new-word order, competency choice
     assessment/        Question generation, grading, response-time → quality
     session.ts         Session planner and state machine (reviews → new words, retries)
     analytics.ts       Dashboard and analytics calculations
+    adaptive.ts        Personal response-time thresholds, retention-calibrated interval modifier
+    weakness.ts        Automatic weak-word detection with reasons
   services/
     LearningStore.ts   Offline-first state and sync outbox (the only stateful service)
   data/
@@ -99,6 +102,43 @@ Queue priority:
 
 The LLM is never used for scheduling.
 
+## Phase 2: memory optimization
+
+**Competency-specific scheduling** (`srs/competency.ts`)
+- Recognition, recall and spelling each have their own SM-2 schedule, stored in `competency_scores.<c>.srs`.
+- The word-level columns are an aggregate. A word is due when its earliest competency is due, and it is "mastered" only when every active competency is.
+- A due word gets up to two questions, most overdue competency first. Questions for different words are interleaved so two tests of the same word are spaced apart.
+- Spelling is introduced only once another competency has 2 consecutive successes.
+- Progress saved before Phase 2 is upgraded on read. The upgrade is lossless and idempotent, and the existing schedule is unchanged.
+
+**Response-time analysis** (`adaptive.ts`)
+- After 20 correct answers of a question type, the fast and slow cut-offs used for SM-2 quality follow your own median time, within 0.5× to 2× of the defaults.
+- Analytics shows your personal thresholds and a weekly median time trend.
+
+**Automatic weak-word detection** (`weakness.ts`)
+- Each word gets a score from five signals: frequent lapses, low ease, low recent accuracy, slow (hesitant) answers, and a gap between competencies (for example "recognizes but can't spell").
+- Each weak word is shown with its reasons.
+- Home offers a "苦手を集中練習" (focused weak-word practice) session. It tests each weak word's weakest *tested* competency.
+- A correct answer before a word is due counts as practice and does not lengthen its schedule. A wrong answer does shorten it.
+
+**Adaptive scheduling**
+- **Interval modifier (0.6–1.4)** calibrated from observed retention on *mature* scheduled reviews (interval of 3 days or more), aiming at 90% retention.
+  - The update is relative to the modifier that actually produced the data. Each review records `prev_interval` and `applied_modifier` for this, which is also groundwork for Phase 4.
+  - A Bayesian prior and damping keep small samples from swinging the schedule.
+  - A first version that estimated the modifier from scratch oscillated between its bounds in simulation. The relative, damped version converges.
+- **Late reviews**: a successful late review gets credit for half the extra time.
+- **Fuzz**: a small deterministic fuzz (±5%) spreads review dates so they don't pile up on one day.
+
+Simulated over 120 days with 60 words and an exponential-forgetting ground truth, averaged over 4 seeds:
+
+| Learner | Plain SM-2 retention | Adaptive retention |
+|---|---|---|
+| Forgets faster than SM-2 assumes | 83–85% | 90–92% (more reviews) |
+| Forgets very quickly | 59% | 75% (modifier at its 0.6 floor) |
+| Strong learner | 92–95% | 93–94% (modifier rises above 1) |
+
+For strong learners, 120 days is too short for the longer intervals to reduce the review count (+3–6%). The tests bound that cost; no saving is claimed.
+
 ## Data model
 
 Static vocabulary (`words`) is separate from per-user data. There are four per-user tables:
@@ -136,7 +176,6 @@ To change the vocabulary, edit the source file and run `npm run vocab:build`.
 
 - **AI Tutor.** Phase 3. The plan is a Supabase Edge Function that holds the OpenAI key server-side; the app gets no key.
 - **Listening, sentence-completion, context and production questions.** Types and database checks already allow them.
-- **Competency-specific scheduling.** Phase 2. Per-competency scores are already stored for each word.
 - **Forgetting-probability prediction.** Phase 4.
 - **Audio pronunciation and IPA data.**
 - **Password reset and account deletion screens.**

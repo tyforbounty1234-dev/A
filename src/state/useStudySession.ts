@@ -14,6 +14,7 @@ import {
   planDailySession,
   planLearnSession,
   planReviewSession,
+  planWeakSession,
   startSession,
   summarize,
   type SessionPlan,
@@ -48,6 +49,7 @@ export function useStudySession(mode: SessionMode) {
     };
     if (mode === 'review') return planReviewSession(ctx);
     if (mode === 'learn') return planLearnSession(ctx);
+    if (mode === 'weak') return planWeakSession({ ...ctx, thresholds: snap.adaptive.thresholds });
     return planDailySession(ctx);
   });
   const [state, setState] = useState<SessionState>(() => startSession(plan));
@@ -143,18 +145,18 @@ export function useStudySession(mode: SessionMode) {
     (index: number | null) => {
       if (question?.kind !== 'choice') return;
       const rt = Date.now() - shownAt.current;
-      void record(evaluateChoice(question, index, rt), rt);
+      void record(evaluateChoice(question, index, rt, snap.adaptive.thresholds), rt);
     },
-    [question, record],
+    [question, record, snap.adaptive.thresholds],
   );
 
   const spell = useCallback(
     (input: string) => {
       if (question?.kind !== 'spelling' || !word) return;
       const rt = Date.now() - shownAt.current;
-      void record(evaluateSpelling(question, word, input, rt), rt);
+      void record(evaluateSpelling(question, word, input, rt, snap.adaptive.thresholds), rt);
     },
-    [question, word, record],
+    [question, word, record, snap.adaptive.thresholds],
   );
 
   const next = useCallback(() => {

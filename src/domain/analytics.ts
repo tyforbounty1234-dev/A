@@ -4,6 +4,8 @@
 import type { Competency, QuestionType, ReviewRecord, StudySession, WordProgress } from './types';
 import { COMPETENCIES } from './types';
 import { isDifficult } from './srs/progress';
+import { detectWeakness, type WeakReason } from './weakness';
+import type { Thresholds } from './adaptive';
 import { countDue, localDayKey } from './srs/queue';
 
 export interface StatusCounts {
@@ -14,14 +16,14 @@ export interface StatusCounts {
   unseen: number;
 }
 
-export function statusCounts(progress: readonly WordProgress[], totalWords: number): StatusCounts {
+export function statusCounts(progress: readonly WordProgress[], totalWords: number, thresholds?: Thresholds): StatusCounts {
   const studied = progress.filter((p) => p.reviewCount > 0);
   const mastered = studied.filter((p) => p.status === 'mastered').length;
   return {
     studied: studied.length,
     mastered,
     learning: studied.length - mastered,
-    difficult: studied.filter(isDifficult).length,
+    difficult: studied.filter((p) => (thresholds ? detectWeakness(p, thresholds).isWeak : isDifficult(p))).length,
     unseen: Math.max(0, totalWords - studied.length),
   };
 }
@@ -84,12 +86,20 @@ export function dailyHistory(reviews: readonly ReviewRecord[], now: Date, days =
   const map = new Map<string, DayStat>(
     keys.map((k) => [k, { day: k, reviews: 0, correct: 0, accuracy: null, newWords: 0 }]),
   );
+  const firstSeen = new Map<string, string>();
+  for (const r of reviews) {
+    const cur = firstSeen.get(r.wordId);
+    if (!cur || r.reviewedAt < cur) firstSeen.set(r.wordId, r.reviewedAt);
+  }
   for (const r of reviews) {
     const s = map.get(localDayKey(new Date(r.reviewedAt)));
     if (!s) continue;
     s.reviews++;
     if (r.isCorrect) s.correct++;
-    if (r.kind === 'new') s.newWords++;
+  }
+  for (const first of firstSeen.values()) {
+    const s = map.get(localDayKey(new Date(first)));
+    if (s) s.newWords++;
   }
   for (const s of map.values()) s.accuracy = s.reviews ? s.correct / s.reviews : null;
   return keys.map((k) => map.get(k)!);
@@ -142,25 +152,66 @@ export function retentionRate(reviews: readonly ReviewRecord[]): AccuracyStat {
 export interface WeakWord {
   wordId: string;
   score: number;
+  reasons: WeakReason[];
+  weakestCompetency: Competency | null;
   lapses: number;
   easeFactor: number;
   recentAccuracy: number | null;
 }
 
-/** Words most at risk, highest weakness score first. */
-export function weakWords(progress: readonly WordProgress[], limit = 10): WeakWord[] {
+/** Weak words detected automatically, highest weakness score first. */
+export function weakWords(progress: readonly WordProgress[], limit = 10, thresholds?: Thresholds): WeakWord[] {
   return progress
-    .filter((p) => p.reviewCount > 0)
-    .map((p) => {
+    .map((p) => ({ p, w: detectWeakness(p, thresholds) }))
+    .filter(({ w }) => w.score >= 1)
+    .sort((a, b) => b.w.score - a.w.score || a.p.wordId.localeCompare(b.p.wordId))
+    .slice(0, limit)
+    .map(({ p, w }) => {
       const recent = p.recentResults.slice(-8);
-      const recentAccuracy = recent.length ? recent.filter(Boolean).length / recent.length : null;
-      const score =
-        p.lapses * 1.5 + (2.5 - p.easeFactor) * 4 + (recentAccuracy === null ? 0 : (1 - recentAccuracy) * 5);
-      return { wordId: p.wordId, score: Math.round(score * 100) / 100, lapses: p.lapses, easeFactor: p.easeFactor, recentAccuracy };
-    })
-    .filter((w) => w.score > 0.5)
-    .sort((a, b) => b.score - a.score || a.wordId.localeCompare(b.wordId))
-    .slice(0, limit);
+      return {
+        wordId: p.wordId,
+        score: w.score,
+        reasons: w.reasons,
+        weakestCompetency: w.weakestCompetency,
+        lapses: p.lapses,
+        easeFactor: p.easeFactor,
+        recentAccuracy: recent.length ? recent.filter(Boolean).length / recent.length : null,
+      };
+    });
+}
+
+export interface TimingWeek {
+  weekStart: string;
+  medianMs: number | null;
+  count: number;
+}
+
+/** Weekly median response time of correct answers, optionally for one question type. */
+export function responseTimeTrend(reviews: readonly ReviewRecord[], now: Date, weeks = 8, type?: QuestionType): TimingWeek[] {
+  const hist = weeklyHistory([], now, weeks);
+  const buckets = new Map<string, number[]>(hist.map((w) => [w.weekStart, []]));
+  for (const r of reviews) {
+    if (!r.isCorrect || (type && r.questionType !== type)) continue;
+    buckets.get(localDayKey(mondayOf(new Date(r.reviewedAt))))?.push(r.responseTimeMs);
+  }
+  return hist.map((w) => {
+    const t = buckets.get(w.weekStart)!.sort((a, b) => a - b);
+    return { weekStart: w.weekStart, medianMs: percentile(t, 0.5), count: t.length };
+  });
+}
+
+/** Competencies due now, counted across all words. */
+export function dueByCompetency(progress: readonly WordProgress[], now: Date): Partial<Record<Competency, number>> {
+  const out: Partial<Record<Competency, number>> = {};
+  for (const p of progress) {
+    for (const c of Object.keys(p.competencyScores) as Competency[]) {
+      const srs = p.competencyScores[c]?.srs;
+      if (srs && srs.status !== 'new' && srs.nextReviewAt && Date.parse(srs.nextReviewAt) <= now.getTime()) {
+        out[c] = (out[c] ?? 0) + 1;
+      }
+    }
+  }
+  return out;
 }
 
 /** Share of planned reviews completed across sessions, or null when nothing was planned. */

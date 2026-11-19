@@ -84,6 +84,19 @@ export interface Word {
   rank: number;
 }
 
+/** SM-2 scheduling state. Used per word and, since Phase 2, per competency. */
+export interface SrsState {
+  repetitions: number;
+  lapses: number;
+  easeFactor: number;
+  intervalDays: number;
+  status: LearningStatus;
+  lastReviewedAt: string | null;
+  nextReviewAt: string | null;
+  /** Interval modifier used when the current interval was scheduled (Phase 2). */
+  modifier?: number;
+}
+
 export interface CompetencyStats {
   attempts: number;
   correct: number;
@@ -92,6 +105,8 @@ export interface CompetencyStats {
   /** Exponential moving average of response time in ms (correct and incorrect). */
   avgResponseMs: number;
   lastAt: string | null;
+  /** Independent schedule for this competency (absent in data written before Phase 2). */
+  srs?: SrsState;
 }
 
 export type CompetencyScores = Partial<Record<Competency, CompetencyStats>>;
@@ -135,9 +150,13 @@ export interface ReviewRecord {
   quality: number;
   kind: ReviewKind;
   reviewedAt: string;
+  /** Interval (days) of the tested competency that this review concluded; null for a first test. */
+  prevIntervalDays: number | null;
+  /** Interval modifier that scheduled that interval; null when unknown. */
+  appliedModifier: number | null;
 }
 
-export type SessionMode = 'review' | 'learn' | 'mixed';
+export type SessionMode = 'review' | 'learn' | 'mixed' | 'weak';
 
 export interface StudySession {
   id: string;

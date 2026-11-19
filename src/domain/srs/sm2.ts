@@ -10,6 +10,11 @@
  *    Early failures still count as lapses.
  * 3. Intervals are capped at MAX_INTERVAL_DAYS and always grow by at least one
  *    day on a successful review.
+ * 5. Adaptive options (Phase 2): a per-user interval modifier calibrated from
+ *    observed retention, credit for successful late reviews (half of the
+ *    overdue time counts toward the interval, as the word survived longer than
+ *    planned), and a small deterministic fuzz that spreads reviews over nearby
+ *    days so they do not pile up on one day.
  * 4. The ease factor only changes on reviews of a learned item (repetitions > 0).
  *    Missing a word the first time it is studied, or during relearning, says
  *    nothing about how well it is retained between spaced reviews, so it must
@@ -17,7 +22,7 @@
  *
  * All functions are pure: time is passed in explicitly.
  */
-import type { LearningStatus, WordProgress } from '../types';
+import type { LearningStatus, SrsState, WordProgress } from '../types';
 
 export const INITIAL_EASE = 2.5;
 export const MIN_EASE = 1.3;
@@ -32,15 +37,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 export type Quality = 0 | 1 | 2 | 3 | 4 | 5;
 
-export interface SrsFields {
-  repetitions: number;
-  lapses: number;
-  easeFactor: number;
-  intervalDays: number;
-  status: LearningStatus;
-  lastReviewedAt: string | null;
-  nextReviewAt: string | null;
-}
+export type SrsFields = SrsState;
 
 export interface ScheduleResult extends SrsFields {
   /** True when this review was early practice and did not change the schedule. */
@@ -81,10 +78,32 @@ export function isDue(fields: Pick<SrsFields, 'nextReviewAt' | 'status'>, now: D
   return Date.parse(fields.nextReviewAt) <= now.getTime();
 }
 
+export const MIN_INTERVAL_MODIFIER = 0.6;
+export const MAX_INTERVAL_MODIFIER = 1.4;
+export const FUZZ_RATIO = 0.05;
+
+export interface ScheduleOptions {
+  /** Multiplies intervals from the second successful review on. Clamped to [0.6, 1.4]. */
+  intervalModifier?: number;
+  /** Stable key (e.g. word id + competency) for deterministic fuzz. No fuzz when omitted. */
+  fuzzKey?: string;
+}
+
+/** Deterministic hash of a string to [0, 1). */
+export function hash01(key: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < key.length; i++) {
+    h ^= key.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return ((h >>> 0) % 100000) / 100000;
+}
+
 /**
  * Compute the next schedule for an item after a review with the given quality.
  */
-export function schedule(prev: SrsFields, quality: number, now: Date): ScheduleResult {
+export function schedule(prev: SrsFields, quality: number, now: Date, options: ScheduleOptions = {}): ScheduleResult {
+  const modifier = Math.min(MAX_INTERVAL_MODIFIER, Math.max(MIN_INTERVAL_MODIFIER, options.intervalModifier ?? 1));
   const q = clampQuality(quality);
   const nowIso = now.toISOString();
 
@@ -100,14 +119,27 @@ export function schedule(prev: SrsFields, quality: number, now: Date): ScheduleR
     const repetitions = prev.repetitions + 1;
     const easeFactor = prev.repetitions > 0 ? nextEase(prev.easeFactor, q) : prev.easeFactor;
     let intervalDays: number;
-    if (repetitions === 1) intervalDays = 1;
-    else if (repetitions === 2) intervalDays = 6;
-    else {
-      const base = Math.max(prev.intervalDays, 1);
-      intervalDays = Math.max(Math.round(base * easeFactor), Math.floor(base) + 1);
+    let minimum: number;
+    if (repetitions === 1) {
+      intervalDays = 1;
+      minimum = 1;
+    } else if (repetitions === 2) {
+      intervalDays = Math.round(6 * modifier);
+      minimum = 2;
+    } else {
+      let base = Math.max(prev.intervalDays, 1);
+      const elapsed = prev.lastReviewedAt ? (now.getTime() - Date.parse(prev.lastReviewedAt)) / DAY_MS : base;
+      if (elapsed > base) base += (elapsed - base) / 2; // remembered despite the delay
+      intervalDays = Math.round(base * easeFactor * modifier);
+      minimum = Math.floor(Math.max(prev.intervalDays, 1)) + 1;
     }
-    intervalDays = Math.min(intervalDays, MAX_INTERVAL_DAYS);
+    if (options.fuzzKey && intervalDays >= 3) {
+      const f = (hash01(`${options.fuzzKey}:${repetitions}`) * 2 - 1) * FUZZ_RATIO;
+      intervalDays = Math.round(intervalDays * (1 + f));
+    }
+    intervalDays = Math.min(Math.max(intervalDays, minimum), MAX_INTERVAL_DAYS);
     return {
+      ...(repetitions >= 2 ? { modifier } : {}),
       repetitions,
       lapses: prev.lapses,
       easeFactor,

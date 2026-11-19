@@ -28,6 +28,8 @@ const rev = (over: Partial<ReviewRecord>): ReviewRecord => ({
   quality: 5,
   kind: 'scheduled',
   reviewedAt: T0.toISOString(),
+  prevIntervalDays: null,
+  appliedModifier: null,
   ...over,
 });
 
@@ -64,13 +66,15 @@ describe('analytics', () => {
 
   it('builds daily history on local days', () => {
     const rs = [
-      rev({ reviewedAt: T0.toISOString(), kind: 'new' }),
-      rev({ reviewedAt: at(T0, -DAY).toISOString(), isCorrect: false }),
+      rev({ wordId: 'a', reviewedAt: T0.toISOString(), kind: 'new' }),
+      rev({ wordId: 'b', reviewedAt: at(T0, -DAY).toISOString(), isCorrect: false, kind: 'new' }),
+      // b's spelling introduced today: not a new word today
+      rev({ wordId: 'b', reviewedAt: T0.toISOString(), kind: 'new', competency: 'spelling' }),
     ];
     const h = dailyHistory(rs, T0, 3);
     expect(h.map((d) => d.day)).toEqual(['2026-11-17', '2026-11-18', '2026-11-19']);
-    expect(h[2]).toMatchObject({ reviews: 1, newWords: 1, accuracy: 1 });
-    expect(h[1]).toMatchObject({ reviews: 1, accuracy: 0 });
+    expect(h[2]).toMatchObject({ reviews: 2, newWords: 1, accuracy: 1 });
+    expect(h[1]).toMatchObject({ reviews: 1, newWords: 1, accuracy: 0 });
   });
 
   it('builds weekly retention from scheduled reviews only', () => {

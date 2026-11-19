@@ -1,7 +1,7 @@
 /**
  * Review queue construction: which words to review now, in which order.
  */
-import type { Competency, Word, WordProgress } from '../types';
+import type { Word, WordProgress } from '../types';
 import { isDue } from './sm2';
 import { isDifficult } from './progress';
 
@@ -65,29 +65,4 @@ export function localDayKey(d: Date): string {
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
-}
-
-/**
- * Choose which competency to test for a review item: the weakest of the
- * available competencies. Untested competencies come first, in the order given.
- * Spelling is only tested after the word has been recognised correctly at least once.
- */
-export function chooseCompetency(p: WordProgress | undefined, available: readonly Competency[]): Competency {
-  if (available.length === 0) throw new Error('chooseCompetency: no competencies available');
-  const candidates = available.filter((c) => {
-    if (c !== 'spelling') return true;
-    return (p?.competencyScores.recognition?.correct ?? 0) > 0;
-  });
-  const pool = candidates.length > 0 ? candidates : [available[0]!];
-  let best = pool[0]!;
-  let bestScore = Infinity;
-  for (const c of pool) {
-    const s = p?.competencyScores[c];
-    const score = s && s.attempts > 0 ? s.proficiency : -1;
-    if (score < bestScore) {
-      best = c;
-      bestScore = score;
-    }
-  }
-  return best;
 }

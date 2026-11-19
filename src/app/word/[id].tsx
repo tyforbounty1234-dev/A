@@ -1,5 +1,6 @@
 import { useLocalSearchParams } from 'expo-router';
 import type { Competency } from '../../domain/types';
+import { WEAK_REASON_LABELS, detectWeakness } from '../../domain/weakness';
 import { useLearning } from '../../state/LearningProvider';
 import { Card, Loading, Row, Screen, SectionLabel, Stat, T, formatPct } from '../../ui/components';
 import { WordDetails } from '../../ui/WordDetails';
@@ -23,6 +24,7 @@ export default function WordScreen() {
   }
   const p = snap.progress.get(word.id);
   const seen = !!p && p.reviewCount > 0;
+  const weakness = p ? detectWeakness(p, snap.adaptive.thresholds) : { reasons: [] };
 
   return (
     <Screen>
@@ -44,12 +46,20 @@ export default function WordScreen() {
               {p.nextReviewAt ? `次の復習: ${formatWhen(p.nextReviewAt)}` : ''}
               {`　復習間隔 ${p.intervalDays >= 1 ? `${Math.round(p.intervalDays)}日` : '1日未満'}　覚えやすさ ${p.easeFactor.toFixed(2)}`}
             </T>
+            {weakness.reasons.length > 0 && (
+              <T variant="small" color={c.bad}>
+                {weakness.reasons.map((r) => WEAK_REASON_LABELS[r]).join('・')}
+              </T>
+            )}
             {(Object.keys(LABELS) as Competency[]).map((k) => {
               const s = p.competencyScores[k];
               return (
                 <Row key={k} style={{ justifyContent: 'space-between' }}>
                   <T>{LABELS[k]}</T>
-                  <T color={s ? c.ink : c.muted}>{s ? `${s.correct}/${s.attempts} 正解・熟達度 ${Math.round(s.proficiency * 100)}` : '未テスト'}</T>
+                  <T variant="small" color={s ? c.ink : c.muted} style={{ textAlign: 'right' }}>
+                    {s ? `${s.correct}/${s.attempts} 正解・熟達度 ${Math.round(s.proficiency * 100)}` : '未テスト'}
+                    {s?.srs?.nextReviewAt ? `\n次: ${formatWhen(s.srs.nextReviewAt)}（間隔 ${s.srs.intervalDays >= 1 ? `${Math.round(s.srs.intervalDays)}日` : '1日未満'}）` : ''}
+                  </T>
                 </Row>
               );
             })}

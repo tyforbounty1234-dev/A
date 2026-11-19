@@ -69,6 +69,8 @@ export interface ReviewRow {
   quality: number;
   response_time: number;
   reviewed_at: string;
+  prev_interval?: number | null;
+  applied_modifier?: number | null;
 }
 
 export interface SessionRow {
@@ -193,6 +195,8 @@ export function reviewFromRow(r: ReviewRow): ReviewRecord {
     quality: r.quality,
     responseTimeMs: r.response_time,
     reviewedAt: r.reviewed_at,
+    prevIntervalDays: r.prev_interval ?? null,
+    appliedModifier: r.applied_modifier ?? null,
   };
 }
 
@@ -209,6 +213,8 @@ export function reviewToRpc(r: ReviewRecord) {
     quality: r.quality,
     response_time: Math.min(3_600_000, Math.max(0, Math.round(r.responseTimeMs))),
     reviewed_at: r.reviewedAt,
+    prev_interval: r.prevIntervalDays,
+    applied_modifier: r.appliedModifier,
   };
 }
 

@@ -24,6 +24,8 @@ import type {
 } from '../domain/types';
 import { DEFAULT_PROFILE } from '../domain/types';
 import { applyAnswer, type ApplyResult } from '../domain/srs/progress';
+import { upgradeProgress } from '../domain/srs/competency';
+import { DEFAULT_ADAPTIVE, adaptiveContext, type AdaptiveContext } from '../domain/adaptive';
 import { classifyError, type RemoteApi } from '../data/remote/api';
 import { readJson, writeJson, type KeyValueStorage } from '../data/storage';
 
@@ -52,6 +54,8 @@ export interface LearningSnapshot {
   reviews: readonly ReviewRecord[];
   sessions: readonly StudySession[];
   profile: UserProfile | null;
+  /** Personal timing thresholds and interval modifier, derived from reviews. */
+  adaptive: AdaptiveContext;
   pendingCount: number;
   failedCount: number;
   sync: SyncState;
@@ -87,6 +91,7 @@ const EMPTY: LearningSnapshot = {
   reviews: [],
   sessions: [],
   profile: null,
+  adaptive: DEFAULT_ADAPTIVE,
   pendingCount: 0,
   failedCount: 0,
   sync: 'idle',
@@ -119,6 +124,9 @@ export class LearningStore {
   getSnapshot = (): LearningSnapshot => this.snap;
 
   private set(patch: Partial<LearningSnapshot>) {
+    if (patch.reviews && patch.reviews !== this.snap.reviews) {
+      patch = { ...patch, adaptive: adaptiveContext(patch.reviews, this.now()) };
+    }
     this.snap = { ...this.snap, ...patch };
     for (const l of this.listeners) l();
   }
@@ -172,8 +180,9 @@ export class LearningStore {
       userId,
       words,
       wordsById: new Map(words.map((w) => [w.id, w])),
-      progress: new Map(progress.filter((p) => p.userId === userId).map((p) => [p.wordId, p])),
+      progress: new Map(progress.filter((p) => p.userId === userId).map((p) => [p.wordId, upgradeProgress(p)])),
       reviews,
+      adaptive: adaptiveContext(reviews, this.now()),
       sessions,
       profile: profile ?? { id: userId, ...DEFAULT_PROFILE },
       pendingCount: this.outbox.length,
@@ -234,7 +243,9 @@ export class LearningStore {
     for (const server of remote.progress) {
       if (pendingWords.has(server.wordId)) continue; // local change not yet uploaded wins
       const local = progress.get(server.wordId);
-      if (!local || (server.lastReviewedAt ?? '') >= (local.lastReviewedAt ?? '')) progress.set(server.wordId, server);
+      if (!local || (server.lastReviewedAt ?? '') >= (local.lastReviewedAt ?? '')) {
+        progress.set(server.wordId, upgradeProgress(server));
+      }
     }
 
     const reviewMap = new Map(this.snap.reviews.map((r) => [r.id, r]));
@@ -330,12 +341,11 @@ export class LearningStore {
     const userId = this.snap.userId;
     if (!userId) throw new Error('LearningStore: no user loaded');
     if (!this.snap.wordsById.has(params.wordId)) throw new Error(`Unknown word ${params.wordId}`);
-    const result = applyAnswer(this.snap.progress.get(params.wordId), {
-      id: this.deps.newId(),
-      userId,
-      now: this.now(),
-      ...params,
-    });
+    const result = applyAnswer(
+      this.snap.progress.get(params.wordId),
+      { id: this.deps.newId(), userId, now: this.now(), ...params },
+      { intervalModifier: this.snap.adaptive.intervalModifier },
+    );
     const progress = new Map(this.snap.progress);
     progress.set(params.wordId, result.progress);
     this.enqueue({ kind: 'review', opId: result.review.id, review: result.review, progress: result.progress });

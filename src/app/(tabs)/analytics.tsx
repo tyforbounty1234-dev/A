@@ -4,6 +4,7 @@ import { Pressable, View } from 'react-native';
 import {
   accuracyByCompetency,
   dailyHistory,
+  dueByCompetency,
   responseTimeStats,
   retentionRate,
   reviewCompletionRate,
@@ -12,6 +13,8 @@ import {
   weeklyHistory,
 } from '../../domain/analytics';
 import type { Competency, QuestionType } from '../../domain/types';
+import { MIN_RETENTION_SAMPLES, MIN_TIMING_SAMPLES, TARGET_RETENTION } from '../../domain/adaptive';
+import { WEAK_REASON_LABELS } from '../../domain/weakness';
 import { useLearning } from '../../state/LearningProvider';
 import { Card, Loading, Row, Screen, SectionLabel, Stat, T, formatPct, formatSeconds } from '../../ui/components';
 import { space, usePalette } from '../../ui/theme';
@@ -34,16 +37,18 @@ export default function Analytics() {
     const now = new Date();
     const progress = [...snap.progress.values()];
     return {
-      counts: statusCounts(progress, snap.words.length),
+      counts: statusCounts(progress, snap.words.length, snap.adaptive.thresholds),
+      dueByComp: dueByCompetency(progress, now),
       competency: accuracyByCompetency(snap.reviews),
       rtByType: (['en_to_ja_mc', 'ja_to_en_mc', 'spelling'] as QuestionType[]).map((t) => [t, responseTimeStats(snap.reviews, t)] as const),
       daily: dailyHistory(snap.reviews, now, 14),
       weekly: weeklyHistory(snap.reviews, now, 8),
       retention: retentionRate(snap.reviews),
       completion: reviewCompletionRate(snap.sessions),
-      weak: weakWords(progress, 10),
+      weak: weakWords(progress, 10, snap.adaptive.thresholds),
     };
-  }, [snap.progress, snap.reviews, snap.sessions, snap.words.length]);
+  }, [snap.progress, snap.reviews, snap.sessions, snap.words.length, snap.adaptive.thresholds]);
+  const ad = snap.adaptive;
   if (!snap.ready) return <Loading />;
   const maxDaily = Math.max(1, ...data.daily.map((d) => d.reviews));
 
@@ -74,6 +79,35 @@ export default function Analytics() {
       </Card>
 
       <Card>
+        <SectionLabel>あなたに合わせた調整</SectionLabel>
+        <Row style={{ justifyContent: 'space-between' }}>
+          <T>復習間隔の補正</T>
+          <T variant="heading">×{ad.intervalModifier.toFixed(2)}</T>
+        </Row>
+        <T variant="small" color={c.muted}>
+          {ad.retentionSamples < MIN_RETENTION_SAMPLES
+            ? `データを集めています（予定どおりの復習 ${ad.retentionSamples} / ${MIN_RETENTION_SAMPLES} 回）。それまでは標準の間隔です。`
+            : ad.intervalModifier > 1
+              ? `よく覚えられているので、復習の間隔を長めにしています（目標の保持率 ${Math.round(TARGET_RETENTION * 100)}%）。`
+              : ad.intervalModifier < 1
+                ? `忘れやすい傾向があるので、復習の間隔を短めにしています（目標の保持率 ${Math.round(TARGET_RETENTION * 100)}%）。`
+                : `保持率が目標の ${Math.round(TARGET_RETENTION * 100)}% 前後なので、標準の間隔です。`}
+        </T>
+        {(['en_to_ja_mc', 'ja_to_en_mc', 'spelling'] as QuestionType[]).map((t) => {
+          const p = ad.personalTiming[t];
+          const [fast, slow] = ad.thresholds[t];
+          return (
+            <Row key={t} style={{ justifyContent: 'space-between' }}>
+              <T>{QT_LABELS[t]}のスピード</T>
+              <T variant="small" color={p ? c.ink : c.muted} style={{ fontVariant: ['tabular-nums'] }}>
+                {p ? `速い ${formatSeconds(fast)}以内・迷い ${formatSeconds(slow)}以上` : `標準の基準（正解 ${MIN_TIMING_SAMPLES} 回で個人化）`}
+              </T>
+            </Row>
+          );
+        })}
+      </Card>
+
+      <Card>
         <SectionLabel>能力別の正答率</SectionLabel>
         {(Object.keys(COMPETENCY_LABELS) as Competency[]).map((k) => (
           <Row key={k} style={{ justifyContent: 'space-between' }}>
@@ -82,11 +116,14 @@ export default function Analytics() {
               {formatPct(data.competency[k].accuracy)}
               <T variant="small" color={c.muted}>
                 {'  '}
-                {data.competency[k].attempts}問
+                {data.competency[k].attempts}問・復習待ち {data.dueByComp[k] ?? 0}
               </T>
             </T>
           </Row>
         ))}
+        <T variant="small" color={c.muted}>
+          認識・想起・つづりは、それぞれ別のスケジュールで復習します。つづりは意味を覚えた単語から順に追加されます。
+        </T>
         <T variant="small" color={c.muted}>
           文脈理解・作文（産出）は今後のアップデートで追加します。
         </T>
@@ -136,12 +173,18 @@ export default function Analytics() {
             if (!word) return null;
             return (
               <Pressable key={w.wordId} accessibilityRole="link" onPress={() => router.push(`/word/${w.wordId}`)}>
-                <Row style={{ justifyContent: 'space-between' }}>
-                  <T variant="heading">{word.word}</T>
-                  <T variant="small" color={c.muted}>
-                    忘れた回数 {w.lapses}・直近正答率 {formatPct(w.recentAccuracy)}
+                <View style={{ gap: 2, paddingVertical: 2 }}>
+                  <Row style={{ justifyContent: 'space-between' }}>
+                    <T variant="heading">{word.word}</T>
+                    <T variant="small" color={c.muted}>
+                      忘れた回数 {w.lapses}・直近正答率 {formatPct(w.recentAccuracy)}
+                    </T>
+                  </Row>
+                  <T variant="small" color={c.bad}>
+                    {w.reasons.map((r) => WEAK_REASON_LABELS[r]).join('・')}
+                    {w.weakestCompetency ? `（弱い力: ${COMPETENCY_LABELS[w.weakestCompetency] ?? w.weakestCompetency}）` : ''}
                   </T>
-                </Row>
+                </View>
               </Pressable>
             );
           })

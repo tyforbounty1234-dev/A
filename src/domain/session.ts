@@ -9,8 +9,11 @@
  */
 import type { Competency, QuestionType, UserProfile, Word, WordProgress } from './types';
 import { PHASE1_COMPETENCIES } from './types';
-import { chooseCompetency, dueProgress, introducedOnDay, unseenWords } from './srs/queue';
+import { dueProgress, introducedOnDay, unseenWords } from './srs/queue';
+import { competenciesToReview, upgradeProgress, weakestCompetency } from './srs/competency';
 import { questionTypeFor } from './assessment/questions';
+import { detectWeakness, type Weakness } from './weakness';
+import type { Thresholds } from './adaptive';
 
 export const MAX_RETRIES_PER_WORD = 2;
 /** Re-test a missed word after this many other steps (or at the end). */
@@ -39,19 +42,70 @@ export function remainingNewWordsToday(ctx: PlanContext): number {
   return Math.max(0, ctx.profile.dailyNewWords - introduced);
 }
 
+/**
+ * Due reviews. Each word gets one question per due competency (at most two);
+ * all first questions come before all second questions so the two tests of the
+ * same word are spaced apart.
+ */
 export function planReviewSession(ctx: PlanContext, maxItems = ctx.profile.dailyReviewLimit): SessionPlan {
   const competencies = ctx.competencies ?? PHASE1_COMPETENCIES;
   const wordIds = new Set(ctx.words.map((w) => w.id));
   const due = dueProgress(ctx.progressByWord.values(), ctx.now)
     .filter((p) => wordIds.has(p.wordId))
     .slice(0, Math.max(0, maxItems));
-  const steps: SessionStep[] = due.map((p) => ({
-    kind: 'question',
-    wordId: p.wordId,
-    questionType: questionTypeFor(chooseCompetency(p, competencies)),
-    isRetry: false,
-  }));
+  const perWord = due.map((p) => competenciesToReview(upgradeProgress(p), ctx.now, competencies));
+  const rounds = Math.max(0, ...perWord.map((c) => c.length));
+  const steps: SessionStep[] = [];
+  for (let r = 0; r < rounds; r++) {
+    due.forEach((p, i) => {
+      const c = perWord[i]![r];
+      if (c) steps.push({ kind: 'question', wordId: p.wordId, questionType: questionTypeFor(c), isRetry: false });
+    });
+  }
   return { steps, reviewWordIds: due.map((p) => p.wordId), newWordIds: [] };
+}
+
+export const WEAK_SESSION_SIZE = 10;
+
+/** Lowest-proficiency competency the learner has actually been tested on. */
+function weakestTested(p: WordProgress, competencies: readonly Competency[]): Competency {
+  const tested = competencies.filter((c) => (p.competencyScores[c]?.attempts ?? 0) > 0);
+  if (tested.length === 0) return weakestCompetency(p, competencies);
+  return tested.reduce((a, b) => (p.competencyScores[b]!.proficiency < p.competencyScores[a]!.proficiency ? b : a));
+}
+
+/** Weak words ranked by weakness score, strongest evidence first. */
+export function rankWeakWords(
+  progress: Iterable<WordProgress>,
+  thresholds?: Thresholds,
+): { progress: WordProgress; weakness: Weakness }[] {
+  const out: { progress: WordProgress; weakness: Weakness }[] = [];
+  for (const p of progress) {
+    const weakness = detectWeakness(p, thresholds);
+    if (weakness.isWeak) out.push({ progress: p, weakness });
+  }
+  return out.sort((a, b) => b.weakness.score - a.weakness.score || a.progress.wordId.localeCompare(b.progress.wordId));
+}
+
+/**
+ * Focused practice on weak words, testing each word's weakest competency.
+ * Correct answers before a word is due are practice and do not lengthen its
+ * schedule; wrong answers still shorten it.
+ */
+export function planWeakSession(ctx: PlanContext & { thresholds?: Thresholds }, size = WEAK_SESSION_SIZE): SessionPlan {
+  const competencies = ctx.competencies ?? PHASE1_COMPETENCIES;
+  const wordIds = new Set(ctx.words.map((w) => w.id));
+  const weak = rankWeakWords(ctx.progressByWord.values(), ctx.thresholds)
+    .filter((x) => wordIds.has(x.progress.wordId))
+    .slice(0, Math.max(0, size));
+  const steps: SessionStep[] = weak.map(({ progress, weakness }) => {
+    const c =
+      weakness.weakestCompetency && competencies.includes(weakness.weakestCompetency)
+        ? weakness.weakestCompetency
+        : weakestTested(progress, competencies);
+    return { kind: 'question', wordId: progress.wordId, questionType: questionTypeFor(c), isRetry: false };
+  });
+  return { steps, reviewWordIds: [], newWordIds: [] };
 }
 
 export function planLearnSession(ctx: PlanContext, count = remainingNewWordsToday(ctx)): SessionPlan {

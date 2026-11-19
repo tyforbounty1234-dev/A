@@ -9,8 +9,8 @@ import { WordDetails } from '../ui/WordDetails';
 import { formatWhen } from '../ui/format';
 import { radius, space, type, usePalette } from '../ui/theme';
 
-const MODES: SessionMode[] = ['review', 'learn', 'mixed'];
-const TITLES: Record<SessionMode, string> = { review: '復習', learn: '新しい単語', mixed: '今日の学習' };
+const MODES: SessionMode[] = ['review', 'learn', 'mixed', 'weak'];
+const TITLES: Record<SessionMode, string> = { review: '復習', learn: '新しい単語', mixed: '今日の学習', weak: '苦手を練習' };
 
 export default function SessionScreen() {
   const params = useLocalSearchParams<{ mode?: string }>();
@@ -42,7 +42,9 @@ function SessionBody({ mode }: { mode: SessionMode }) {
 
         {view.kind === 'empty' && (
           <Card>
-            <T variant="heading">{mode === 'learn' ? '今日の新しい単語は終わりです' : 'いま復習する単語はありません'}</T>
+            <T variant="heading">
+              {mode === 'learn' ? '今日の新しい単語は終わりです' : mode === 'weak' ? '苦手な単語はありません' : 'いま復習する単語はありません'}
+            </T>
             <T color={c.muted}>
               {mode === 'learn'
                 ? '1日の目標は設定から変えられます。覚えた単語は、忘れかけたころに復習に出てきます。'

@@ -1,6 +1,9 @@
 /**
  * Applying a single answered question to a user's word progress.
  * Pure: produces a new WordProgress and the immutable ReviewRecord to persist.
+ *
+ * Since Phase 2 the answer reschedules only the competency that was tested;
+ * the word-level schedule is the aggregate of all active competencies.
  */
 import type {
   Competency,
@@ -9,10 +12,13 @@ import type {
   QuestionType,
   ReviewKind,
   ReviewRecord,
+  SrsState,
   WordProgress,
 } from '../types';
 import { QUESTION_COMPETENCY } from '../types';
 import { initialSrs, isPassing, schedule, srsFieldsOf } from './sm2';
+import { aggregateSrs, competencySrs, upgradeProgress } from './competency';
+import { detectWeakness } from '../weakness';
 
 export const RECENT_RESULTS_CAP = 20;
 /** Weight of the newest observation in competency moving averages. */
@@ -45,15 +51,25 @@ export interface AnswerInput {
   now: Date;
 }
 
+export interface ApplyOptions {
+  /** Per-user interval modifier from adaptiveContext(). */
+  intervalModifier?: number;
+  /** Spread review dates deterministically (default true). */
+  fuzz?: boolean;
+}
+
 export interface ApplyResult {
   progress: WordProgress;
   review: ReviewRecord;
 }
 
-export function reviewKindFor(prev: WordProgress, now: Date): ReviewKind {
-  if (prev.status === 'new' || prev.reviewCount === 0) return 'new';
-  if (prev.repetitions === 0) return 'relearn';
-  if (prev.nextReviewAt && Date.parse(prev.nextReviewAt) > now.getTime()) return 'practice';
+/** How this review relates to the tested competency's schedule. */
+export function reviewKindFor(prev: WordProgress, competency: Competency, now: Date): ReviewKind {
+  if (prev.reviewCount === 0) return 'new';
+  const srs = competencySrs(prev, competency);
+  if (!srs || srs.status === 'new') return 'new';
+  if (srs.repetitions === 0) return 'relearn';
+  if (srs.nextReviewAt && Date.parse(srs.nextReviewAt) > now.getTime()) return 'practice';
   return 'scheduled';
 }
 
@@ -63,11 +79,12 @@ export function updateCompetency(
   isCorrect: boolean,
   responseTimeMs: number,
   nowIso: string,
+  srs: SrsState,
 ): CompetencyStats {
   const q01 = Math.min(5, Math.max(0, quality)) / 5;
   const rt = Math.max(0, Math.round(responseTimeMs));
   if (!prev || prev.attempts === 0) {
-    return { attempts: 1, correct: isCorrect ? 1 : 0, proficiency: round3(q01), avgResponseMs: rt, lastAt: nowIso };
+    return { attempts: 1, correct: isCorrect ? 1 : 0, proficiency: round3(q01), avgResponseMs: rt, lastAt: nowIso, srs };
   }
   const a = COMPETENCY_EMA_ALPHA;
   return {
@@ -76,20 +93,30 @@ export function updateCompetency(
     proficiency: round3(prev.proficiency * (1 - a) + q01 * a),
     avgResponseMs: Math.round(prev.avgResponseMs * (1 - a) + rt * a),
     lastAt: nowIso,
+    srs,
   };
 }
 
-export function applyAnswer(prevOrUndefined: WordProgress | undefined, input: AnswerInput): ApplyResult {
-  const prev = prevOrUndefined ?? newProgress(input.userId, input.wordId);
+export function applyAnswer(
+  prevOrUndefined: WordProgress | undefined,
+  input: AnswerInput,
+  options: ApplyOptions = {},
+): ApplyResult {
+  const prev = upgradeProgress(prevOrUndefined ?? newProgress(input.userId, input.wordId));
   if (prev.userId !== input.userId || prev.wordId !== input.wordId) {
     throw new Error('applyAnswer: progress does not belong to this user/word');
   }
   const nowIso = input.now.toISOString();
   const competency: Competency = QUESTION_COMPETENCY[input.questionType];
-  const kind = reviewKindFor(prev, input.now);
+  const kind = reviewKindFor(prev, competency, input.now);
   // Correctness is the source of truth; quality must agree with it.
   const quality = input.isCorrect ? Math.max(3, input.quality) : Math.min(2, input.quality);
-  const next = schedule(srsFieldsOf(prev), quality, input.now);
+
+  const prevSrs = competencySrs(prev, competency) ?? initialSrs();
+  const { wasEarly: _early, ...nextSrs } = schedule(prevSrs, quality, input.now, {
+    intervalModifier: options.intervalModifier,
+    fuzzKey: options.fuzz === false ? undefined : `${input.wordId}:${competency}`,
+  });
 
   const competencyScores: CompetencyScores = {
     ...prev.competencyScores,
@@ -99,18 +126,14 @@ export function applyAnswer(prevOrUndefined: WordProgress | undefined, input: An
       input.isCorrect,
       input.responseTimeMs,
       nowIso,
+      nextSrs,
     ),
   };
+  const word = aggregateSrs(competencyScores, srsFieldsOf(prev));
 
   const progress: WordProgress = {
     ...prev,
-    repetitions: next.repetitions,
-    lapses: next.lapses,
-    easeFactor: next.easeFactor,
-    intervalDays: next.intervalDays,
-    status: next.status,
-    lastReviewedAt: next.lastReviewedAt,
-    nextReviewAt: next.nextReviewAt,
+    ...word,
     reviewCount: prev.reviewCount + 1,
     correctCount: prev.correctCount + (input.isCorrect ? 1 : 0),
     incorrectCount: prev.incorrectCount + (input.isCorrect ? 0 : 1),
@@ -132,22 +155,16 @@ export function applyAnswer(prevOrUndefined: WordProgress | undefined, input: An
     quality,
     kind,
     reviewedAt: nowIso,
+    prevIntervalDays: prevSrs.status === 'new' ? null : prevSrs.intervalDays,
+    appliedModifier: prevSrs.status === 'new' ? null : (prevSrs.modifier ?? 1),
   };
 
   return { progress, review };
 }
 
-/** Words that need extra attention. */
+/** Words that need extra attention (default timing thresholds). */
 export function isDifficult(p: WordProgress): boolean {
-  if (p.reviewCount === 0) return false;
-  if (p.lapses >= 3) return true;
-  if (p.easeFactor < 1.8) return true;
-  const recent = p.recentResults.slice(-6);
-  if (recent.length >= 4) {
-    const acc = recent.filter(Boolean).length / recent.length;
-    if (acc < 0.5) return true;
-  }
-  return false;
+  return detectWeakness(p).isWeak;
 }
 
 export function proficiencyOf(p: WordProgress, c: Competency): number | null {
